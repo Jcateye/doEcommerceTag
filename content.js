@@ -54,6 +54,7 @@ function createPanel() {
       <div class="dde-kv"><strong>导入数据</strong><span id="dde-data-status">未导入</span></div>
       <div class="dde-actions">
         <button class="dde-button secondary" id="dde-refresh-btn">刷新面板</button>
+        <button class="dde-button secondary" id="dde-diagnose-btn">诊断页面</button>
         <button class="dde-button primary" id="dde-preview-btn">扫描预览</button>
         <button class="dde-button primary" id="dde-run-btn">开始执行</button>
       </div>
@@ -74,6 +75,7 @@ function createPanel() {
   document.body.appendChild(panel)
 
   panel.querySelector('#dde-refresh-btn')?.addEventListener('click', refreshPanelData)
+  panel.querySelector('#dde-diagnose-btn')?.addEventListener('click', diagnosePage)
   panel.querySelector('#dde-preview-btn')?.addEventListener('click', previewExecution)
   panel.querySelector('#dde-run-btn')?.addEventListener('click', runExecution)
 }
@@ -136,6 +138,80 @@ function collectCurrentPageLiveRoomCodes() {
   const text = document.body?.innerText || ''
   const matches = text.match(/D\d{3,4}/g) || []
   return [...new Set(matches)]
+}
+
+function summarizeVisibleButtons() {
+  return getVisibleElements('button, [role="button"], a')
+    .map((node) => getElementText(node).replace(/\s+/g, ' '))
+    .filter(Boolean)
+    .slice(0, 40)
+}
+
+function summarizeVisibleInputs() {
+  return getVisibleElements('input, textarea').slice(0, 60).map((node, index) => ({
+    index,
+    tag: node.tagName.toLowerCase(),
+    type: node.getAttribute('type') || '',
+    value: node.value || '',
+    placeholder: node.getAttribute('placeholder') || '',
+    ariaLabel: node.getAttribute('aria-label') || '',
+    disabled: Boolean(node.disabled),
+  }))
+}
+
+function summarizeCandidateRows() {
+  return getVisibleElements('tr, [data-row-key], .semi-table-row, .arco-table-tr, [class*="row"], [class*="Row"]')
+    .map((node) => getElementText(node).replace(/\s+/g, ' '))
+    .filter((text) => /D\d{3,4}/.test(text) || text.includes('商家编码') || text.includes('SKU编码'))
+    .slice(0, 30)
+}
+
+function copyText(text) {
+  return navigator.clipboard?.writeText(text).catch(() => undefined)
+}
+
+async function diagnosePage() {
+  const diagnosis = {
+    url: location.href,
+    isTargetPage: isTargetPage(),
+    liveRoomCodes: collectCurrentPageLiveRoomCodes(),
+    addSpecButtonText: getElementText(findSpecAddButton()),
+    buttons: summarizeVisibleButtons(),
+    inputs: summarizeVisibleInputs(),
+    candidateRows: summarizeCandidateRows(),
+    createdAt: new Date().toISOString(),
+  }
+
+  const text = JSON.stringify(diagnosis, null, 2)
+  await copyText(text)
+  setHtml('dde-summary-box', `
+    <div><span class="dde-badge success">诊断完成</span></div>
+    <div class="dde-status-line">已扫描：按钮 ${diagnosis.buttons.length} 个，输入框 ${diagnosis.inputs.length} 个，候选行 ${diagnosis.candidateRows.length} 条。</div>
+    <div class="dde-status-line">诊断 JSON 已尝试复制到剪贴板。</div>
+  `)
+  setHtml('dde-log-box', `
+    <strong>页面诊断</strong>
+    <pre class="dde-code">${escapeHtml(text)}</pre>
+  `)
+
+  chrome.runtime.sendMessage({
+    type: 'APPEND_EXECUTION_LOG',
+    summary: `页面诊断：输入框 ${diagnosis.inputs.length}，候选行 ${diagnosis.candidateRows.length}`,
+    details: {
+      phase: 'diagnose',
+      diagnosis,
+      url: location.href,
+    },
+  })
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;')
 }
 
 async function previewExecution() {
