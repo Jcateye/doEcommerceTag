@@ -348,27 +348,76 @@ function findSpecTypeAddButton() {
     || findClickableByText(['添加规格类型', '新增规格类型'])
 }
 
-function findOpenPopup() {
+function getPopupCandidates() {
   const popupSelectors = [
     '[role="dialog"]',
+    '[role="listbox"]',
     '[class*="popover"]',
     '[class*="Popover"]',
     '[class*="dropdown"]',
     '[class*="Dropdown"]',
     '[class*="select"]',
     '[class*="Select"]',
+    '[class*="tooltip"]',
+    '[class*="Tooltip"]',
   ]
   return popupSelectors
     .flatMap((selector) => getVisibleElements(selector))
+    .filter((node, index, list) => list.indexOf(node) === index)
+}
+
+function findOpenPopup() {
+  return getPopupCandidates()
     .filter((node) => {
       const text = getElementText(node)
-      return text.includes('创建类型') || text.includes('确定') || text.includes('无合适选项')
+      return text.includes('创建类型') || text.includes('确定') || text.includes('无合适选项') || /D\d{3,4}/.test(text)
     })
     .sort((a, b) => (b.getBoundingClientRect().width * b.getBoundingClientRect().height) - (a.getBoundingClientRect().width * a.getBoundingClientRect().height))[0] || null
 }
 
 function findConfirmButton(scope = document) {
-  return findClickableByText(['确定', '确认'], scope)
+  return findClickableByText(['确定', '确认', '完成', '保存'], scope)
+}
+
+async function waitForCondition(fn, timeout = 3000, interval = 100) {
+  const start = Date.now()
+  while (Date.now() - start < timeout) {
+    const result = fn()
+    if (result) return result
+    await sleep(interval)
+  }
+  return null
+}
+
+function findOptionByText(text, scope = document) {
+  const candidates = [...scope.querySelectorAll('[role="option"], li, div, span, button')].filter((node) => {
+    const rect = node.getBoundingClientRect()
+    const style = window.getComputedStyle(node)
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+  })
+  return candidates
+    .map((node) => ({ node, label: getElementText(node).replace(/\s+/g, '') }))
+    .filter((item) => item.label === text || item.label.includes(text))
+    .sort((a, b) => a.label.length - b.label.length)[0]?.node || null
+}
+
+function findCheckButtonNear(node) {
+  const scope = node?.closest?.('[role="dialog"], [class*="popover"], [class*="Popover"], [class*="dropdown"], [class*="Dropdown"], div') || document
+  const buttons = [...scope.querySelectorAll('button, [role="button"], span, div')].filter((candidate) => {
+    const rect = candidate.getBoundingClientRect()
+    const style = window.getComputedStyle(candidate)
+    if (rect.width <= 0 || rect.height <= 0 || style.visibility === 'hidden' || style.display === 'none') return false
+    const text = getElementText(candidate).replace(/\s+/g, '')
+    const aria = String(candidate.getAttribute('aria-label') || '')
+    const title = String(candidate.getAttribute('title') || '')
+    return ['✓', '✔', '勾', '确定', '确认', '完成'].some((flag) => text.includes(flag) || aria.includes(flag) || title.includes(flag))
+      || Boolean(candidate.querySelector('svg'))
+  })
+  return buttons.sort((a, b) => {
+    const ar = a.getBoundingClientRect()
+    const br = b.getBoundingClientRect()
+    return (ar.width * ar.height) - (br.width * br.height)
+  })[0] || null
 }
 
 function getEditableInputs() {
@@ -394,26 +443,66 @@ function findNewCandidateInput(beforeInputs) {
   return newInput || findLastEmptyTextInput(colorRoot) || findLastEmptyTextInput(specRoot) || findLastEmptyTextInput()
 }
 
-async function clickCreateTypeIfPopupAppears(liveRoomCode) {
+async function selectSpecValueFromDropdown(triggerInput, liveRoomCode) {
+  const option = await waitForCondition(() => {
+    const popup = findOpenPopup()
+    return popup ? findOptionByText(liveRoomCode, popup) : findOptionByText(liveRoomCode)
+  }, 2500)
+
+  if (!option) return false
+  clickElement(option)
+  await sleep(250)
+
+  const confirmButton = findConfirmButton(findOpenPopup() || document)
+  if (confirmButton && getElementText(confirmButton).length <= 6) {
+    clickElement(confirmButton)
+    await sleep(250)
+  } else if (triggerInput) {
+    triggerInput.blur()
+  }
+  return true
+}
+
+async function clickCreateTypeIfPopupAppears(liveRoomCode, triggerInput) {
   const popup = findOpenPopup()
   if (!popup) return false
+
+  const existingOption = findOptionByText(liveRoomCode, popup)
+  if (existingOption) {
+    clickElement(existingOption)
+    await sleep(250)
+    return true
+  }
 
   const createButton = findClickableByText(['创建类型', '新建类型'], popup)
   if (!createButton) return false
 
   clickElement(createButton)
-  await sleep(250)
+  await sleep(300)
 
-  const input = findLastEmptyTextInput(popup) || findLastEmptyTextInput(document)
-  if (input) {
-    setNativeInputValue(input, liveRoomCode)
-    await sleep(150)
+  const createInput = await waitForCondition(() => findLastEmptyTextInput(findOpenPopup() || popup) || findLastEmptyTextInput(document), 2500)
+  if (!createInput) throw new Error(`点击创建类型后找不到 ${liveRoomCode} 输入框`)
+
+  clickElement(createInput)
+  setNativeInputValue(createInput, liveRoomCode)
+  await sleep(200)
+
+  const checkButton = findCheckButtonNear(createInput) || findConfirmButton(findOpenPopup() || document)
+  if (checkButton) {
+    clickElement(checkButton)
+  } else {
+    createInput.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }))
+    createInput.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }))
   }
+  await sleep(500)
 
-  const confirmButton = findConfirmButton(popup) || findConfirmButton(document)
-  if (confirmButton) {
-    clickElement(confirmButton)
-    await sleep(350)
+  const selected = await selectSpecValueFromDropdown(triggerInput, liveRoomCode)
+  if (selected) return true
+
+  if (triggerInput) {
+    clickElement(triggerInput)
+    await sleep(250)
+    return selectSpecValueFromDropdown(triggerInput, liveRoomCode)
   }
 
   return true
@@ -443,15 +532,18 @@ async function createSpecValue(liveRoomCode) {
   setNativeInputValue(input, liveRoomCode)
   await sleep(350)
 
-  const createdFromPopup = await clickCreateTypeIfPopupAppears(liveRoomCode)
+  const createdFromPopup = await clickCreateTypeIfPopupAppears(liveRoomCode, input)
   if (!createdFromPopup) {
-    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }))
-    input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }))
-    input.blur()
+    const selected = await selectSpecValueFromDropdown(input, liveRoomCode)
+    if (!selected) {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }))
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }))
+      input.blur()
+    }
   }
 
   await sleep(500)
-  return { status: 'success', message: createdFromPopup ? '规格值已通过创建类型弹窗输入' : '规格值已输入' }
+  return { status: 'success', message: createdFromPopup ? '规格值已创建并尝试选中' : '规格值已输入/选中' }
 }
 
 function findRowByLiveRoomCode(liveRoomCode) {
