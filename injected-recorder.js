@@ -44,17 +44,8 @@
     }
   }
 
-  function shouldRecord(url) {
-    const text = String(url || '')
-    return window.__DDE_HTTP_RECORDER_ENABLED__ && (
-      text.includes('fxg.jinritemai.com') ||
-      text.startsWith('/') ||
-      text.includes('/product') ||
-      text.includes('/sku') ||
-      text.includes('/spec') ||
-      text.includes('/item') ||
-      text.includes('/ffa')
-    )
+  function shouldRecord(_url) {
+    return window.__DDE_HTTP_RECORDER_ENABLED__
   }
 
   function emit(payload) {
@@ -111,6 +102,26 @@
     } catch (error) {
       if (shouldRecord(url)) emit({ type: 'fetch', startedAt, endedAt: now(), method, url: String(url || ''), requestHeaders, requestBody, error: error.message })
       throw error
+    }
+  }
+
+  const originalSendBeacon = navigator.sendBeacon?.bind(navigator)
+  if (originalSendBeacon) {
+    navigator.sendBeacon = function (url, data) {
+      if (shouldRecord(url)) {
+        emit({
+          type: 'sendBeacon',
+          startedAt: now(),
+          endedAt: now(),
+          method: 'POST',
+          url: String(url || ''),
+          requestHeaders: {},
+          requestBody: truncate(data || ''),
+          status: 'beacon-sent',
+          responseBody: '',
+        })
+      }
+      return originalSendBeacon(url, data)
     }
   }
 
