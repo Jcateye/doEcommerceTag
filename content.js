@@ -4,6 +4,9 @@ const EXTENSION_STATE = {
   observerStarted: false,
   lastResults: [],
   anchors: null,
+  httpRecords: [],
+  recorderInstalled: false,
+  recorderEnabled: false,
 }
 
 const STORAGE_KEYS = {
@@ -43,6 +46,31 @@ function createLauncher() {
   document.body.appendChild(button)
 }
 
+function injectHttpRecorder() {
+  if (EXTENSION_STATE.recorderInstalled) return
+  EXTENSION_STATE.recorderInstalled = true
+  const script = document.createElement('script')
+  script.src = chrome.runtime.getURL('injected-recorder.js')
+  script.onload = () => script.remove()
+  ;(document.head || document.documentElement).appendChild(script)
+
+  window.addEventListener('message', (event) => {
+    if (event.source !== window) return
+    const data = event.data || {}
+    if (data.source !== 'DDE_HTTP_RECORDER') return
+    const payload = data.payload || {}
+    if (payload.type === 'recorder-state') {
+      EXTENSION_STATE.recorderEnabled = Boolean(payload.enabled)
+      renderHttpRecorderStatus()
+      return
+    }
+    if (payload.type === 'recorder-installed') return
+    EXTENSION_STATE.httpRecords.push(payload)
+    EXTENSION_STATE.httpRecords = EXTENSION_STATE.httpRecords.slice(-300)
+    renderHttpRecorderStatus()
+  })
+}
+
 function createPanel() {
   const panel = document.createElement('aside')
   panel.id = 'doecommerce-tag-panel'
@@ -70,6 +98,9 @@ function createPanel() {
         <button class="dde-button secondary" id="dde-diagnose-btn">诊断页面</button>
         <button class="dde-button secondary" id="dde-pick-color-btn">点选颜色分类自定义</button>
         <button class="dde-button secondary" id="dde-pick-merchant-btn">点选商家编码列</button>
+        <button class="dde-button secondary" id="dde-rec-start-btn">开始录制请求</button>
+        <button class="dde-button secondary" id="dde-rec-stop-btn">停止录制</button>
+        <button class="dde-button secondary" id="dde-rec-export-btn">导出请求</button>
         <button class="dde-button primary" id="dde-preview-btn">扫描预览</button>
         <button class="dde-button primary" id="dde-run-btn">开始执行</button>
         <button class="dde-button secondary" id="dde-export-btn">导出报告</button>
@@ -94,6 +125,9 @@ function createPanel() {
   panel.querySelector('#dde-diagnose-btn')?.addEventListener('click', diagnosePage)
   panel.querySelector('#dde-pick-color-btn')?.addEventListener('click', () => pickAnchor('colorDropdown'))
   panel.querySelector('#dde-pick-merchant-btn')?.addEventListener('click', () => pickAnchor('merchantCode'))
+  panel.querySelector('#dde-rec-start-btn')?.addEventListener('click', startHttpRecording)
+  panel.querySelector('#dde-rec-stop-btn')?.addEventListener('click', stopHttpRecording)
+  panel.querySelector('#dde-rec-export-btn')?.addEventListener('click', exportHttpRecords)
   panel.querySelector('#dde-preview-btn')?.addEventListener('click', previewExecution)
   panel.querySelector('#dde-run-btn')?.addEventListener('click', runExecution)
   panel.querySelector('#dde-export-btn')?.addEventListener('click', exportReport)
@@ -107,6 +141,51 @@ function setText(id, text) {
 function setHtml(id, html) {
   const node = document.getElementById(id)
   if (node) node.innerHTML = html
+}
+
+function controlHttpRecorder(command) {
+  window.postMessage({ source: 'DDE_HTTP_RECORDER_CONTROL', command }, '*')
+}
+
+function renderHttpRecorderStatus() {
+  const records = EXTENSION_STATE.httpRecords || []
+  const last = records[records.length - 1]
+  setHtml('dde-log-box', `
+    <strong>HTTP 请求录制</strong>
+    <div class="dde-status-line">状态：${EXTENSION_STATE.recorderEnabled ? '录制中' : '已停止'}；已捕获：${records.length} 条</div>
+    ${last ? `<div class="dde-status-line">最后请求：${last.method || ''} ${escapeHtml(last.url || '').slice(0, 180)}，状态 ${last.status || last.error || '-'}</div>` : '<div class="dde-status-line">暂无请求。请开始录制后，手动创建 1 个规格并保存草稿。</div>'}
+  `)
+}
+
+function startHttpRecording() {
+  injectHttpRecorder()
+  EXTENSION_STATE.httpRecords = []
+  EXTENSION_STATE.recorderEnabled = true
+  controlHttpRecorder('start')
+  renderHttpRecorderStatus()
+}
+
+function stopHttpRecording() {
+  controlHttpRecorder('stop')
+  EXTENSION_STATE.recorderEnabled = false
+  renderHttpRecorderStatus()
+}
+
+function exportHttpRecords() {
+  const records = EXTENSION_STATE.httpRecords || []
+  if (!records.length) {
+    window.alert('暂无请求记录')
+    return
+  }
+  const blob = new Blob([JSON.stringify(records, null, 2)], { type: 'application/json;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `抖店请求录制-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.json`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
 }
 
 function getCssPath(el) {
@@ -906,6 +985,7 @@ async function runExecution() {
 
 function ensureUiInjected() {
   if (!isTargetPage()) return
+  injectHttpRecorder()
 
   if (!EXTENSION_STATE.launcherInjected && !document.getElementById('doecommerce-tag-launcher')) {
     createLauncher()

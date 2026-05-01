@@ -6,6 +6,7 @@ const requiredFiles = [
   'manifest.json',
   'background.js',
   'content.js',
+  'injected-recorder.js',
   'popup.html',
   'popup.js',
   'popup.css',
