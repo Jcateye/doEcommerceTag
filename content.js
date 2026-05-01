@@ -132,18 +132,21 @@ async function refreshPanelData() {
     return
   }
 
-  const previewRows = snapshot.items.slice(0, 8).map((item) => `
+  const previewItems = snapshot.items.slice(0, 20)
+  const previewRows = previewItems.map((item) => `
     <tr>
-      <td>${item.liveRoomCode}</td>
-      <td>${item.shopCode}</td>
+      <td>${item.rowIndex || '-'}</td>
+      <td>${item.liveRoomCode || '-'}</td>
+      <td>${item.shopCode || '-'}</td>
       <td>${item.isValid === false ? `异常：${(item.validationErrors || []).join('、')}` : (item.remark || '-')}</td>
     </tr>
   `).join('')
 
   setHtml('dde-preview-box', `
     <strong>预览数据</strong>
+    <div class="dde-status-line">显示前 ${previewItems.length}/${snapshot.items.length} 条；空白行会跳过，图片列不参与解析。</div>
     <table>
-      <thead><tr><th>直播间编号</th><th>商家编码</th><th>备注</th></tr></thead>
+      <thead><tr><th>Excel行</th><th>编码</th><th>商家编码</th><th>状态/备注</th></tr></thead>
       <tbody>${previewRows}</tbody>
     </table>
   `)
