@@ -72,6 +72,15 @@
 .dde-badge.success { background: #e9fbf4; color: var(--dde-success); }
 .dde-badge.warn { background: #fff8e8; color: #a46d00; }
 .dde-badge.error { background: #fff2f2; color: var(--dde-danger); }
+.dde-badge.recording {
+  background: #e9fbf4;
+  color: var(--dde-success);
+  animation: dde-pulse 1s infinite;
+}
+@keyframes dde-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: .45; }
+}
 .dde-status-line { font-size: 13px; color: var(--dde-muted); margin-top: 6px; }
 .dde-code {
   margin: 10px 0 0;

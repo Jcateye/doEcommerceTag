@@ -105,6 +105,10 @@ function createPanel() {
         <button class="dde-button primary" id="dde-run-btn">开始执行</button>
         <button class="dde-button secondary" id="dde-export-btn">导出报告</button>
       </div>
+      <div class="dde-status" id="dde-recorder-status-box">
+        <div><span class="dde-badge warn">HTTP 录制未开启</span></div>
+        <div class="dde-status-line">点击「开始录制请求」后，请手动操作页面并保存草稿。</div>
+      </div>
       <div class="dde-status" id="dde-summary-box">
         <div>等待操作</div>
         <div class="dde-status-line">先在插件弹窗里导入 Excel，再回到此页执行。</div>
@@ -150,10 +154,28 @@ function controlHttpRecorder(command) {
 function renderHttpRecorderStatus() {
   const records = EXTENSION_STATE.httpRecords || []
   const last = records[records.length - 1]
+  const statusBadge = EXTENSION_STATE.recorderEnabled
+    ? '<span class="dde-badge recording">● 录制中</span>'
+    : '<span class="dde-badge warn">录制已停止</span>'
+  const lastLine = last
+    ? `最后请求：${last.method || ''} ${escapeHtml(last.url || '').slice(0, 180)}，状态 ${last.status || last.error || '-'}`
+    : '暂无请求。开始录制后，请手动创建 1 个规格并保存草稿。'
+
+  setHtml('dde-recorder-status-box', `
+    <div>${statusBadge}</div>
+    <div class="dde-status-line">已捕获请求：${records.length} 条</div>
+    <div class="dde-status-line">${lastLine}</div>
+  `)
+
+  const startBtn = document.getElementById('dde-rec-start-btn')
+  const stopBtn = document.getElementById('dde-rec-stop-btn')
+  if (startBtn) startBtn.textContent = EXTENSION_STATE.recorderEnabled ? `录制中 ${records.length}` : '开始录制请求'
+  if (stopBtn) stopBtn.textContent = EXTENSION_STATE.recorderEnabled ? '停止录制' : '已停止录制'
+
   setHtml('dde-log-box', `
     <strong>HTTP 请求录制</strong>
     <div class="dde-status-line">状态：${EXTENSION_STATE.recorderEnabled ? '录制中' : '已停止'}；已捕获：${records.length} 条</div>
-    ${last ? `<div class="dde-status-line">最后请求：${last.method || ''} ${escapeHtml(last.url || '').slice(0, 180)}，状态 ${last.status || last.error || '-'}</div>` : '<div class="dde-status-line">暂无请求。请开始录制后，手动创建 1 个规格并保存草稿。</div>'}
+    <div class="dde-status-line">${lastLine}</div>
   `)
 }
 
