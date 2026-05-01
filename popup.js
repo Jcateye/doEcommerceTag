@@ -1,5 +1,5 @@
 const headerAliases = {
-  liveRoomCode: ['直播间编号', '直播间编码', '规格编号', '规格值', 'liveRoomCode', 'roomCode'],
+  liveRoomCode: ['编码', '直播间编号', '直播间编码', '规格编号', '规格值', 'liveRoomCode', 'roomCode'],
   shopCode: ['店铺编号', '商家编码', '店铺编码', 'SKU编码', 'shopCode', 'merchantCode', 'outerCode'],
   remark: ['备注', '说明', 'remark'],
 }
