@@ -3,11 +3,13 @@ const EXTENSION_STATE = {
   launcherInjected: false,
   observerStarted: false,
   lastResults: [],
+  anchors: null,
 }
 
 const STORAGE_KEYS = {
   mapping: 'mappingData',
   meta: 'mappingMeta',
+  anchors: 'domAnchors',
 }
 
 function isDoudianHost() {
@@ -66,6 +68,8 @@ function createPanel() {
       <div class="dde-actions">
         <button class="dde-button secondary" id="dde-refresh-btn">刷新面板</button>
         <button class="dde-button secondary" id="dde-diagnose-btn">诊断页面</button>
+        <button class="dde-button secondary" id="dde-pick-color-btn">点选颜色分类自定义</button>
+        <button class="dde-button secondary" id="dde-pick-merchant-btn">点选商家编码列</button>
         <button class="dde-button primary" id="dde-preview-btn">扫描预览</button>
         <button class="dde-button primary" id="dde-run-btn">开始执行</button>
         <button class="dde-button secondary" id="dde-export-btn">导出报告</button>
@@ -88,6 +92,8 @@ function createPanel() {
 
   panel.querySelector('#dde-refresh-btn')?.addEventListener('click', refreshPanelData)
   panel.querySelector('#dde-diagnose-btn')?.addEventListener('click', diagnosePage)
+  panel.querySelector('#dde-pick-color-btn')?.addEventListener('click', () => pickAnchor('colorDropdown'))
+  panel.querySelector('#dde-pick-merchant-btn')?.addEventListener('click', () => pickAnchor('merchantCode'))
   panel.querySelector('#dde-preview-btn')?.addEventListener('click', previewExecution)
   panel.querySelector('#dde-run-btn')?.addEventListener('click', runExecution)
   panel.querySelector('#dde-export-btn')?.addEventListener('click', exportReport)
@@ -103,12 +109,99 @@ function setHtml(id, html) {
   if (node) node.innerHTML = html
 }
 
+function getCssPath(el) {
+  if (!el || el === document.body) return 'body'
+  const parts = []
+  let node = el
+  while (node && node.nodeType === 1 && node !== document.body) {
+    let part = node.tagName.toLowerCase()
+    if (node.id && !node.id.startsWith('doecommerce-tag')) {
+      part += `#${CSS.escape(node.id)}`
+      parts.unshift(part)
+      break
+    }
+    const parent = node.parentElement
+    if (!parent) break
+    const siblings = [...parent.children].filter((child) => child.tagName === node.tagName)
+    if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(node) + 1})`
+    parts.unshift(part)
+    node = parent
+  }
+  return `body > ${parts.join(' > ')}`
+}
+
+function findByCssPath(path) {
+  if (!path) return null
+  try {
+    const node = document.querySelector(path)
+    if (!node) return null
+    const rect = node.getBoundingClientRect()
+    return rect.width > 0 && rect.height > 0 ? node : null
+  } catch (_error) {
+    return null
+  }
+}
+
+function getAnchorRect(el) {
+  const rect = el.getBoundingClientRect()
+  return {
+    x: Math.round(rect.left),
+    y: Math.round(rect.top),
+    width: Math.round(rect.width),
+    height: Math.round(rect.height),
+    centerX: Math.round(rect.left + rect.width / 2),
+    centerY: Math.round(rect.top + rect.height / 2),
+  }
+}
+
+function pickAnchor(type) {
+  setHtml('dde-summary-box', `
+    <div><span class="dde-badge warn">等待点选</span></div>
+    <div class="dde-status-line">请在页面上点击${type === 'colorDropdown' ? '“颜色分类”里的自定义下拉框/输入框' : '任意一行的“商家编码”输入框'}。这次点击会被插件记录，不会触发页面操作。</div>
+  `)
+
+  const handler = (event) => {
+    const panel = document.getElementById('doecommerce-tag-panel')
+    if (panel?.contains(event.target)) return
+    event.preventDefault()
+    event.stopPropagation()
+    event.stopImmediatePropagation()
+
+    const target = event.target.closest?.('input, textarea, [role="combobox"], [role="button"], button, div, span') || event.target
+    const anchor = {
+      selector: getCssPath(target),
+      text: getElementText(target).slice(0, 120),
+      tag: target.tagName?.toLowerCase?.() || '',
+      rect: getAnchorRect(target),
+      savedAt: Date.now(),
+    }
+
+    chrome.storage.local.get([STORAGE_KEYS.anchors], (result) => {
+      const anchors = result[STORAGE_KEYS.anchors] || {}
+      anchors[type] = anchor
+      chrome.storage.local.set({ [STORAGE_KEYS.anchors]: anchors }, () => {
+        EXTENSION_STATE.anchors = anchors
+        setHtml('dde-summary-box', `
+          <div><span class="dde-badge success">锚点已保存</span></div>
+          <div class="dde-status-line">${type === 'colorDropdown' ? '颜色分类自定义入口' : '商家编码列'}：${anchor.tag} ${anchor.text || anchor.selector}</div>
+        `)
+        refreshPanelData()
+      })
+    })
+
+    document.removeEventListener('click', handler, true)
+  }
+
+  document.addEventListener('click', handler, true)
+}
+
 function getStorageSnapshot() {
   return new Promise((resolve) => {
-    chrome.storage.local.get([STORAGE_KEYS.mapping, STORAGE_KEYS.meta], (result) => {
+    chrome.storage.local.get([STORAGE_KEYS.mapping, STORAGE_KEYS.meta, STORAGE_KEYS.anchors], (result) => {
       resolve({
         items: Array.isArray(result[STORAGE_KEYS.mapping]) ? result[STORAGE_KEYS.mapping] : [],
         meta: result[STORAGE_KEYS.meta] || null,
+        anchors: result[STORAGE_KEYS.anchors] || {},
       })
     })
   })
@@ -125,7 +218,9 @@ async function refreshPanelData() {
   const count = snapshot.items.length
   const validCount = snapshot.items.filter((item) => item.isValid !== false).length
   const invalidCount = count - validCount
-  setHtml('dde-data-status', count ? `${count} 条；可执行 ${validCount}；异常 ${invalidCount}（${getImportedAtText(snapshot.meta)}）` : '未导入')
+  EXTENSION_STATE.anchors = snapshot.anchors || {}
+  const anchorStatus = `${snapshot.anchors?.colorDropdown ? '颜色锚点✓' : '颜色锚点未选'} / ${snapshot.anchors?.merchantCode ? '商家编码锚点✓' : '商家编码锚点未选'}`
+  setHtml('dde-data-status', count ? `${count} 条；可执行 ${validCount}；异常 ${invalidCount}（${getImportedAtText(snapshot.meta)}）<br>${anchorStatus}` : `未导入<br>${anchorStatus}`)
 
   if (!count) {
     setHtml('dde-preview-box', '<strong>预览数据</strong><div class="dde-status-line">暂无导入数据</div>')
@@ -197,6 +292,7 @@ async function diagnosePage() {
     specRootText: getElementText(findSpecRoot()).slice(0, 500),
     addSpecButtonText: getElementText(findSpecAddButton()),
     addSpecTypeButtonText: getElementText(findSpecTypeAddButton()),
+    anchors: EXTENSION_STATE.anchors || {},
     popupText: getElementText(findOpenPopup()).slice(0, 500),
     buttons: summarizeVisibleButtons(),
     inputs: summarizeVisibleInputs(),
@@ -527,19 +623,24 @@ async function createSpecValue(liveRoomCode) {
     return { status: 'skipped', message: '页面已存在规格值' }
   }
 
-  const addButton = findSpecAddButton()
-  if (!addButton) {
-    const typeButton = findSpecTypeAddButton()
-    if (typeButton) throw new Error('只找到“添加规格类型”，未找到“颜色分类”下的添加规格值入口')
-    throw new Error('找不到“颜色分类”下的添加规格值按钮')
+  const anchorInput = findByCssPath(EXTENSION_STATE.anchors?.colorDropdown?.selector)
+  let input = anchorInput
+
+  if (!input) {
+    const addButton = findSpecAddButton()
+    if (!addButton) {
+      const typeButton = findSpecTypeAddButton()
+      if (typeButton) throw new Error('只找到“添加规格类型”，未找到“颜色分类”下的添加规格值入口；建议先点选颜色分类自定义锚点')
+      throw new Error('找不到“颜色分类”下的添加规格值按钮；建议先点选颜色分类自定义锚点')
+    }
+
+    const beforeInputs = getEditableInputs()
+    clickElement(addButton)
+    await sleep(400)
+    input = findNewCandidateInput(beforeInputs)
   }
 
-  const beforeInputs = getEditableInputs()
-  clickElement(addButton)
-  await sleep(400)
-
-  const input = findNewCandidateInput(beforeInputs)
-  if (!input) throw new Error('点击添加后找不到规格值输入框')
+  if (!input) throw new Error('找不到颜色分类自定义输入/下拉框')
 
   clickElement(input)
   await sleep(120)
@@ -616,6 +717,12 @@ function findMerchantCodeInputInRow(row) {
   const inputs = [...row.querySelectorAll('input:not([disabled]), textarea:not([disabled])')]
   if (!inputs.length) return null
   if (inputs.length === 1) return inputs[0]
+
+  const anchorX = EXTENSION_STATE.anchors?.merchantCode?.rect?.centerX
+  if (anchorX) {
+    const byAnchorColumn = findInputNearestColumn(row, anchorX)
+    if (byAnchorColumn) return byAnchorColumn
+  }
 
   const labels = ['商家编码', '店铺编号', 'SKU编码', '编码']
 
