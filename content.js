@@ -175,7 +175,10 @@ async function diagnosePage() {
     url: location.href,
     isTargetPage: isTargetPage(),
     liveRoomCodes: collectCurrentPageLiveRoomCodes(),
+    specRootText: getElementText(findSpecRoot()).slice(0, 500),
     addSpecButtonText: getElementText(findSpecAddButton()),
+    addSpecTypeButtonText: getElementText(findSpecTypeAddButton()),
+    popupText: getElementText(findOpenPopup()).slice(0, 500),
     buttons: summarizeVisibleButtons(),
     inputs: summarizeVisibleInputs(),
     candidateRows: summarizeCandidateRows(),
@@ -265,8 +268,12 @@ function getElementText(node) {
   return String(node?.innerText || node?.textContent || '').trim()
 }
 
-function findClickableByText(textList) {
-  const candidates = getVisibleElements('button, [role="button"], a, span, div')
+function findClickableByText(textList, scope = document) {
+  const candidates = [...scope.querySelectorAll('button, [role="button"], a, span, div')].filter((node) => {
+    const rect = node.getBoundingClientRect()
+    const style = window.getComputedStyle(node)
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+  })
   return candidates.find((node) => {
     const text = getElementText(node)
     return textList.some((fragment) => text === fragment || text.includes(fragment))
@@ -296,20 +303,102 @@ function setNativeInputValue(input, value) {
   input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }))
 }
 
+function findNearestBlockByText(labels) {
+  const anchors = getVisibleElements('section, div, form, article').filter((node) => {
+    const text = getElementText(node)
+    return labels.some((label) => text.includes(label))
+  })
+
+  return anchors
+    .map((node) => ({ node, area: node.getBoundingClientRect().width * node.getBoundingClientRect().height }))
+    .filter((item) => item.area > 1000)
+    .sort((a, b) => a.area - b.area)[0]?.node || document.body
+}
+
+function findSpecRoot() {
+  return findNearestBlockByText(['商品规格', '销售规格', '规格类型', '规格值', '尺码大小', '尺码表'])
+}
+
 function findSpecAddButton() {
-  return findClickableByText(['添加规格值', '添加规格', '新增规格值', '新增规格'])
+  const root = findSpecRoot()
+  return findClickableByText(['添加规格值', '新增规格值', '添加规格', '新增规格'], root)
+    || findClickableByText(['添加规格值', '新增规格值', '添加规格', '新增规格'])
+}
+
+function findSpecTypeAddButton() {
+  const root = findSpecRoot()
+  return findClickableByText(['添加规格类型', '新增规格类型'], root)
+    || findClickableByText(['添加规格类型', '新增规格类型'])
+}
+
+function findOpenPopup() {
+  const popupSelectors = [
+    '[role="dialog"]',
+    '[class*="popover"]',
+    '[class*="Popover"]',
+    '[class*="dropdown"]',
+    '[class*="Dropdown"]',
+    '[class*="select"]',
+    '[class*="Select"]',
+  ]
+  return popupSelectors
+    .flatMap((selector) => getVisibleElements(selector))
+    .filter((node) => {
+      const text = getElementText(node)
+      return text.includes('创建类型') || text.includes('确定') || text.includes('无合适选项')
+    })
+    .sort((a, b) => (b.getBoundingClientRect().width * b.getBoundingClientRect().height) - (a.getBoundingClientRect().width * a.getBoundingClientRect().height))[0] || null
+}
+
+function findConfirmButton(scope = document) {
+  return findClickableByText(['确定', '确认'], scope)
 }
 
 function getEditableInputs() {
   return getVisibleElements('input:not([disabled]), textarea:not([disabled])')
 }
 
-function findLastEmptyTextInput() {
-  const inputs = getEditableInputs().filter((input) => {
+function findLastEmptyTextInput(scope = document) {
+  const root = scope === document ? document : scope
+  const inputs = [...root.querySelectorAll('input:not([disabled]), textarea:not([disabled])')].filter((input) => {
+    const rect = input.getBoundingClientRect()
+    const style = window.getComputedStyle(input)
     const type = String(input.getAttribute('type') || 'text').toLowerCase()
-    return ['text', 'search', ''].includes(type) && !input.value
+    return rect.width > 0 && rect.height > 0 && style.display !== 'none' && ['text', 'search', ''].includes(type) && !input.value
   })
   return inputs[inputs.length - 1] || null
+}
+
+function findNewCandidateInput(beforeInputs) {
+  const beforeSet = new Set(beforeInputs)
+  const specRoot = findSpecRoot()
+  const newInput = getEditableInputs().find((input) => !beforeSet.has(input) && !input.value)
+  return newInput || findLastEmptyTextInput(specRoot) || findLastEmptyTextInput()
+}
+
+async function clickCreateTypeIfPopupAppears(liveRoomCode) {
+  const popup = findOpenPopup()
+  if (!popup) return false
+
+  const createButton = findClickableByText(['创建类型', '新建类型'], popup)
+  if (!createButton) return false
+
+  clickElement(createButton)
+  await sleep(250)
+
+  const input = findLastEmptyTextInput(popup) || findLastEmptyTextInput(document)
+  if (input) {
+    setNativeInputValue(input, liveRoomCode)
+    await sleep(150)
+  }
+
+  const confirmButton = findConfirmButton(popup) || findConfirmButton(document)
+  if (confirmButton) {
+    clickElement(confirmButton)
+    await sleep(350)
+  }
+
+  return true
 }
 
 async function createSpecValue(liveRoomCode) {
@@ -318,16 +407,33 @@ async function createSpecValue(liveRoomCode) {
   }
 
   const addButton = findSpecAddButton()
-  if (!addButton) throw new Error('找不到“添加规格值”按钮')
+  if (!addButton) {
+    const typeButton = findSpecTypeAddButton()
+    if (typeButton) throw new Error('只找到“添加规格类型”，未找到“添加规格值”；需要先确认规格类型已存在')
+    throw new Error('找不到“添加规格值”按钮')
+  }
+
+  const beforeInputs = getEditableInputs()
   clickElement(addButton)
+  await sleep(400)
+
+  const input = findNewCandidateInput(beforeInputs)
+  if (!input) throw new Error('点击添加后找不到规格值输入框')
+
+  clickElement(input)
+  await sleep(120)
+  setNativeInputValue(input, liveRoomCode)
   await sleep(350)
 
-  const input = findLastEmptyTextInput()
-  if (!input) throw new Error('点击添加后找不到空规格输入框')
-  setNativeInputValue(input, liveRoomCode)
-  await sleep(500)
+  const createdFromPopup = await clickCreateTypeIfPopupAppears(liveRoomCode)
+  if (!createdFromPopup) {
+    input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true }))
+    input.dispatchEvent(new KeyboardEvent('keyup', { key: 'Enter', code: 'Enter', bubbles: true }))
+    input.blur()
+  }
 
-  return { status: 'success', message: '规格值已输入' }
+  await sleep(500)
+  return { status: 'success', message: createdFromPopup ? '规格值已通过创建类型弹窗输入' : '规格值已输入' }
 }
 
 function findRowByLiveRoomCode(liveRoomCode) {
