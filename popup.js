@@ -26,8 +26,8 @@ function parseWorkbookRows(rows) {
   const shopCodeIndex = findHeaderIndex(headers, headerAliases.shopCode)
   const remarkIndex = findHeaderIndex(headers, headerAliases.remark)
 
-  if (liveRoomCodeIndex < 0) throw new Error('未找到“直播间编号”表头')
-  if (shopCodeIndex < 0) throw new Error('未找到“商家编码/店铺编号”表头')
+  if (liveRoomCodeIndex < 0) throw new Error('未找到“编码”表头')
+  if (shopCodeIndex < 0) throw new Error('未找到“商家编码”表头')
 
   const items = rows.slice(1)
     .map((row, rowOffset) => ({
@@ -35,33 +35,34 @@ function parseWorkbookRows(rows) {
       shopCode: String(row[shopCodeIndex] || '').trim(),
       remark: remarkIndex >= 0 ? String(row[remarkIndex] || '').trim() : '',
       rowIndex: rowOffset + 2,
+      validationErrors: [],
+      isValid: true,
     }))
-    .filter((item) => item.liveRoomCode || item.shopCode)
+    .filter((item) => item.liveRoomCode || item.shopCode || item.remark)
 
-  const duplicatedLiveRoomCodes = []
   const seen = new Set()
   for (const item of items) {
-    if (!item.liveRoomCode) throw new Error(`第 ${item.rowIndex} 行直播间编号为空`)
-    if (!item.shopCode) throw new Error(`第 ${item.rowIndex} 行商家编码为空`)
-    if (seen.has(item.liveRoomCode)) duplicatedLiveRoomCodes.push(item.liveRoomCode)
-    seen.add(item.liveRoomCode)
-  }
-
-  if (duplicatedLiveRoomCodes.length) {
-    throw new Error(`直播间编号重复：${[...new Set(duplicatedLiveRoomCodes)].join('、')}`)
+    if (!item.liveRoomCode) item.validationErrors.push('编码为空')
+    if (!item.shopCode) item.validationErrors.push('商家编码为空')
+    if (item.liveRoomCode && seen.has(item.liveRoomCode)) item.validationErrors.push('编码重复')
+    if (item.liveRoomCode) seen.add(item.liveRoomCode)
+    item.isValid = item.validationErrors.length === 0
   }
 
   return items
 }
 
-function renderMeta(meta, count) {
+function renderMeta(meta, items) {
+  const count = Array.isArray(items) ? items.length : 0
   if (!meta || !count) {
     metaEl.textContent = '暂无导入数据'
     return
   }
 
+  const validCount = items.filter((item) => item.isValid !== false).length
+  const invalidCount = count - validCount
   const importedAt = new Date(meta.importedAt).toLocaleString('zh-CN', { hour12: false })
-  metaEl.innerHTML = `文件：${meta.fileName || '-'}<br>数量：${count}<br>导入时间：${importedAt}`
+  metaEl.innerHTML = `文件：${meta.fileName || '-'}<br>总数：${count}；可执行：${validCount}；异常：${invalidCount}<br>导入时间：${importedAt}`
 }
 
 function renderLogs(logs) {
@@ -82,7 +83,7 @@ function refreshSnapshot() {
   chrome.runtime.sendMessage({ type: 'GET_STORAGE_SNAPSHOT' }, (response) => {
     if (!response?.ok) return
     const data = response.data || {}
-    renderMeta(data.mappingMeta, Array.isArray(data.mappingData) ? data.mappingData.length : 0)
+    renderMeta(data.mappingMeta, Array.isArray(data.mappingData) ? data.mappingData : [])
     renderLogs(data.executionLogs || [])
   })
 }
@@ -104,7 +105,8 @@ fileInput.addEventListener('change', async (event) => {
         return
       }
       refreshSnapshot()
-      alert(`导入成功，共 ${items.length} 条`)
+      const validCount = items.filter((item) => item.isValid !== false).length
+      alert(`导入成功，共 ${items.length} 条；可执行 ${validCount} 条；异常 ${items.length - validCount} 条`)
     })
   } catch (error) {
     alert(error.message || 'Excel 解析失败')

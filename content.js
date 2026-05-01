@@ -2,6 +2,7 @@ const EXTENSION_STATE = {
   panelInjected: false,
   launcherInjected: false,
   observerStarted: false,
+  lastResults: [],
 }
 
 const STORAGE_KEYS = {
@@ -67,6 +68,7 @@ function createPanel() {
         <button class="dde-button secondary" id="dde-diagnose-btn">诊断页面</button>
         <button class="dde-button primary" id="dde-preview-btn">扫描预览</button>
         <button class="dde-button primary" id="dde-run-btn">开始执行</button>
+        <button class="dde-button secondary" id="dde-export-btn">导出报告</button>
       </div>
       <div class="dde-status" id="dde-summary-box">
         <div>等待操作</div>
@@ -88,6 +90,7 @@ function createPanel() {
   panel.querySelector('#dde-diagnose-btn')?.addEventListener('click', diagnosePage)
   panel.querySelector('#dde-preview-btn')?.addEventListener('click', previewExecution)
   panel.querySelector('#dde-run-btn')?.addEventListener('click', runExecution)
+  panel.querySelector('#dde-export-btn')?.addEventListener('click', exportReport)
 }
 
 function setText(id, text) {
@@ -120,7 +123,9 @@ async function refreshPanelData() {
   setText('dde-page-status', isTargetPage() ? '已识别商品创建/编辑页' : '当前页不匹配')
   const snapshot = await getStorageSnapshot()
   const count = snapshot.items.length
-  setHtml('dde-data-status', count ? `${count} 条（${getImportedAtText(snapshot.meta)}）` : '未导入')
+  const validCount = snapshot.items.filter((item) => item.isValid !== false).length
+  const invalidCount = count - validCount
+  setHtml('dde-data-status', count ? `${count} 条；可执行 ${validCount}；异常 ${invalidCount}（${getImportedAtText(snapshot.meta)}）` : '未导入')
 
   if (!count) {
     setHtml('dde-preview-box', '<strong>预览数据</strong><div class="dde-status-line">暂无导入数据</div>')
@@ -131,7 +136,7 @@ async function refreshPanelData() {
     <tr>
       <td>${item.liveRoomCode}</td>
       <td>${item.shopCode}</td>
-      <td>${item.remark || '-'}</td>
+      <td>${item.isValid === false ? `异常：${(item.validationErrors || []).join('、')}` : (item.remark || '-')}</td>
     </tr>
   `).join('')
 
@@ -235,15 +240,18 @@ async function previewExecution() {
     return
   }
 
+  const executableItems = snapshot.items.filter((item) => item.isValid !== false)
+  const invalidItems = snapshot.items.filter((item) => item.isValid === false)
   const existingCodes = collectCurrentPageLiveRoomCodes()
   const existingSet = new Set(existingCodes)
-  const duplicated = snapshot.items.filter((item) => existingSet.has(item.liveRoomCode))
-  const pending = snapshot.items.filter((item) => !existingSet.has(item.liveRoomCode))
+  const duplicated = executableItems.filter((item) => existingSet.has(item.liveRoomCode))
+  const pending = executableItems.filter((item) => !existingSet.has(item.liveRoomCode))
 
   setHtml('dde-summary-box', `
     <div><span class="dde-badge success">Excel 总数 ${snapshot.items.length}</span></div>
+    <div class="dde-status-line">可执行：${executableItems.length}；异常数据：${invalidItems.length}</div>
     <div class="dde-status-line">页面已存在：${duplicated.length}；待创建：${pending.length}</div>
-    <div class="dde-status-line">第一版执行器将以“商家编码”字段为目标。</div>
+    <div class="dde-status-line">第一版执行器将以“商家编码”字段为目标；异常数据会跳过并进报告。</div>
   `)
 
   chrome.runtime.sendMessage({
@@ -252,6 +260,9 @@ async function previewExecution() {
     details: {
       phase: 'preview',
       total: snapshot.items.length,
+      valid: executableItems.length,
+      invalid: invalidItems.length,
+      invalidItems,
       existing: duplicated.length,
       pending: pending.length,
       url: location.href,
@@ -654,22 +665,56 @@ async function writeMerchantCode(liveRoomCode, shopCode) {
   return { status: 'success', message: '商家编码已写入' }
 }
 
+function toCsvCell(value) {
+  const text = String(value ?? '')
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
+}
+
+function exportReport() {
+  const results = EXTENSION_STATE.lastResults || []
+  if (!results.length) {
+    window.alert('暂无可导出的执行结果')
+    return
+  }
+
+  const header = ['行号', '编码', '商家编码', '状态', '说明']
+  const rows = results.map((item) => [
+    item.rowIndex || '',
+    item.liveRoomCode || '',
+    item.shopCode || '',
+    item.status || '',
+    item.message || '',
+  ])
+  const csv = [header, ...rows].map((row) => row.map(toCsvCell).join(',')).join('\n')
+  const blob = new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' })
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `抖店批量规格执行报告-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.csv`
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  URL.revokeObjectURL(url)
+}
+
 function renderExecutionResults(results) {
+  EXTENSION_STATE.lastResults = results
   const success = results.filter((item) => item.status === 'success').length
   const skipped = results.filter((item) => item.status === 'skipped').length
   const failed = results.filter((item) => item.status === 'failed').length
+  const invalid = results.filter((item) => item.status === 'invalid').length
   const rows = results.slice(-12).reverse().map((item) => `
     <tr>
       <td>${item.liveRoomCode}</td>
       <td>${item.shopCode}</td>
-      <td><span class="dde-badge ${item.status === 'success' ? 'success' : item.status === 'failed' ? 'error' : 'warn'}">${item.status}</span></td>
+      <td><span class="dde-badge ${item.status === 'success' ? 'success' : (item.status === 'failed' || item.status === 'invalid') ? 'error' : 'warn'}">${item.status}</span></td>
       <td>${item.message || '-'}</td>
     </tr>
   `).join('')
 
   setHtml('dde-log-box', `
     <strong>执行日志</strong>
-    <div class="dde-status-line">成功：${success}；跳过：${skipped}；失败：${failed}</div>
+    <div class="dde-status-line">成功：${success}；跳过：${skipped}；失败：${failed}；异常：${invalid}</div>
     <div class="dde-preview" style="margin-top: 8px; padding: 8px;">
       <table>
         <thead><tr><th>直播间</th><th>商家编码</th><th>状态</th><th>说明</th></tr></thead>
@@ -680,11 +725,12 @@ function renderExecutionResults(results) {
 }
 
 function getRunItems(items) {
+  const executableItems = items.filter((item) => item.isValid !== false)
   const select = document.getElementById('dde-run-limit')
   const value = select?.value || '1'
-  if (value === 'all') return items
+  if (value === 'all') return executableItems
   const limit = Number(value) || 1
-  return items.slice(0, limit)
+  return executableItems.slice(0, limit)
 }
 
 async function runExecution() {
@@ -698,7 +744,14 @@ async function runExecution() {
   const confirmed = window.confirm(`即将尝试处理 ${runItems.length}/${snapshot.items.length} 条规格。插件不会点击保存/发布。建议先只试 1 条。是否开始？`)
   if (!confirmed) return
 
-  const results = []
+  const invalidResults = snapshot.items
+    .filter((item) => item.isValid === false)
+    .map((item) => ({
+      ...item,
+      status: 'invalid',
+      message: (item.validationErrors || []).join('、') || '异常数据，已跳过',
+    }))
+  const results = [...invalidResults]
   for (const item of runItems) {
     try {
       setHtml('dde-summary-box', `<div><span class="dde-badge warn">执行中</span></div><div class="dde-status-line">正在处理 ${item.liveRoomCode} -> ${item.shopCode}</div>`)
