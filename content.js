@@ -452,30 +452,95 @@ function findRowByLiveRoomCode(liveRoomCode) {
   return null
 }
 
+function getElementCenterX(node) {
+  const rect = node.getBoundingClientRect()
+  return rect.left + rect.width / 2
+}
+
+function findTableLikeRoot(node) {
+  let current = node
+  while (current && current !== document.body) {
+    const text = getElementText(current)
+    if ((text.includes('商家编码') || text.includes('SKU编码')) && /D\d{3,4}/.test(text)) return current
+    if (current.matches?.('table, [class*="table"], [class*="Table"], [role="table"], [class*="sku"], [class*="Sku"]')) return current
+    current = current.parentElement
+  }
+  return document.body
+}
+
+function findHeaderCellByLabel(tableRoot, labels) {
+  const candidates = [...tableRoot.querySelectorAll('th, [role="columnheader"], div, span')].filter((node) => {
+    const text = getElementText(node).replace(/\s+/g, '')
+    return labels.some((label) => text === label || text.includes(label))
+  })
+  return candidates
+    .map((node) => ({ node, area: node.getBoundingClientRect().width * node.getBoundingClientRect().height }))
+    .filter((item) => item.area > 20)
+    .sort((a, b) => a.area - b.area)[0]?.node || null
+}
+
+function findInputNearestColumn(row, targetX) {
+  const inputs = [...row.querySelectorAll('input:not([disabled]), textarea:not([disabled])')]
+  if (!inputs.length) return null
+  return inputs
+    .map((input) => ({ input, distance: Math.abs(getElementCenterX(input) - targetX) }))
+    .sort((a, b) => a.distance - b.distance)[0].input
+}
+
 function findMerchantCodeInputInRow(row) {
   if (!row) return null
   const inputs = [...row.querySelectorAll('input:not([disabled]), textarea:not([disabled])')]
+  if (!inputs.length) return null
   if (inputs.length === 1) return inputs[0]
 
   const labels = ['商家编码', '店铺编号', 'SKU编码', '编码']
-  const rowText = getElementText(row)
-  if (!labels.some((label) => rowText.includes(label))) {
-    return inputs[inputs.length - 1] || null
-  }
 
-  return inputs.find((input) => {
+  const direct = inputs.find((input) => {
     const placeholder = String(input.getAttribute('placeholder') || '')
     const ariaLabel = String(input.getAttribute('aria-label') || '')
-    return labels.some((label) => placeholder.includes(label) || ariaLabel.includes(label))
-  }) || inputs[inputs.length - 1] || null
+    const name = String(input.getAttribute('name') || '')
+    return labels.some((label) => placeholder.includes(label) || ariaLabel.includes(label) || name.includes(label))
+  })
+  if (direct) return direct
+
+  const tableRoot = findTableLikeRoot(row)
+  const header = findHeaderCellByLabel(tableRoot, ['商家编码', 'SKU编码', '店铺编号'])
+  if (header) {
+    const byColumn = findInputNearestColumn(row, getElementCenterX(header))
+    if (byColumn) return byColumn
+  }
+
+  const rowText = getElementText(row)
+  if (labels.some((label) => rowText.includes(label))) return inputs[inputs.length - 1] || null
+  return inputs[inputs.length - 1] || null
 }
 
-function writeMerchantCode(liveRoomCode, shopCode) {
-  const row = findRowByLiveRoomCode(liveRoomCode)
+async function scrollFindRowByLiveRoomCode(liveRoomCode) {
+  let row = findRowByLiveRoomCode(liveRoomCode)
+  if (row) return row
+
+  const scrollContainers = getVisibleElements('div, section, main').filter((node) => node.scrollHeight > node.clientHeight + 40)
+  for (const container of scrollContainers.slice(0, 8)) {
+    const originalTop = container.scrollTop
+    for (let i = 0; i < 12; i += 1) {
+      container.scrollTop = Math.min(container.scrollHeight, i * Math.max(160, container.clientHeight * 0.7))
+      await sleep(120)
+      row = findRowByLiveRoomCode(liveRoomCode)
+      if (row) return row
+    }
+    container.scrollTop = originalTop
+  }
+
+  return null
+}
+
+async function writeMerchantCode(liveRoomCode, shopCode) {
+  const row = await scrollFindRowByLiveRoomCode(liveRoomCode)
   if (!row) throw new Error(`找不到 ${liveRoomCode} 对应 SKU 行`)
   const input = findMerchantCodeInputInRow(row)
   if (!input) throw new Error(`找不到 ${liveRoomCode} 的商家编码输入框`)
   setNativeInputValue(input, shopCode)
+  input.dispatchEvent(new FocusEvent('blur', { bubbles: true }))
   return { status: 'success', message: '商家编码已写入' }
 }
 
@@ -520,7 +585,7 @@ async function runExecution() {
       setHtml('dde-summary-box', `<div><span class="dde-badge warn">执行中</span></div><div class="dde-status-line">正在处理 ${item.liveRoomCode} -> ${item.shopCode}</div>`)
       const createResult = await createSpecValue(item.liveRoomCode)
       await sleep(randomBetween(600, 1000))
-      const writeResult = writeMerchantCode(item.liveRoomCode, item.shopCode)
+      const writeResult = await writeMerchantCode(item.liveRoomCode, item.shopCode)
       results.push({
         ...item,
         status: createResult.status === 'skipped' ? 'skipped' : writeResult.status,
