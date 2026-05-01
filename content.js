@@ -175,6 +175,7 @@ async function diagnosePage() {
     url: location.href,
     isTargetPage: isTargetPage(),
     liveRoomCodes: collectCurrentPageLiveRoomCodes(),
+    colorSpecRootText: getElementText(findColorSpecRoot()).slice(0, 500),
     specRootText: getElementText(findSpecRoot()).slice(0, 500),
     addSpecButtonText: getElementText(findSpecAddButton()),
     addSpecTypeButtonText: getElementText(findSpecTypeAddButton()),
@@ -316,12 +317,18 @@ function findNearestBlockByText(labels) {
 }
 
 function findSpecRoot() {
-  return findNearestBlockByText(['商品规格', '销售规格', '规格类型', '规格值', '尺码大小', '尺码表'])
+  return findNearestBlockByText(['颜色分类', '商品规格', '销售规格', '规格类型', '规格值', '尺码大小', '尺码表'])
+}
+
+function findColorSpecRoot() {
+  return findNearestBlockByText(['颜色分类'])
 }
 
 function findSpecAddButton() {
-  const root = findSpecRoot()
-  return findClickableByText(['添加规格值', '新增规格值', '添加规格', '新增规格'], root)
+  const colorRoot = findColorSpecRoot()
+  const specRoot = findSpecRoot()
+  return findClickableByText(['添加规格值', '新增规格值', '添加规格', '新增规格'], colorRoot)
+    || findClickableByText(['添加规格值', '新增规格值', '添加规格', '新增规格'], specRoot)
     || findClickableByText(['添加规格值', '新增规格值', '添加规格', '新增规格'])
 }
 
@@ -371,9 +378,10 @@ function findLastEmptyTextInput(scope = document) {
 
 function findNewCandidateInput(beforeInputs) {
   const beforeSet = new Set(beforeInputs)
+  const colorRoot = findColorSpecRoot()
   const specRoot = findSpecRoot()
   const newInput = getEditableInputs().find((input) => !beforeSet.has(input) && !input.value)
-  return newInput || findLastEmptyTextInput(specRoot) || findLastEmptyTextInput()
+  return newInput || findLastEmptyTextInput(colorRoot) || findLastEmptyTextInput(specRoot) || findLastEmptyTextInput()
 }
 
 async function clickCreateTypeIfPopupAppears(liveRoomCode) {
@@ -409,8 +417,8 @@ async function createSpecValue(liveRoomCode) {
   const addButton = findSpecAddButton()
   if (!addButton) {
     const typeButton = findSpecTypeAddButton()
-    if (typeButton) throw new Error('只找到“添加规格类型”，未找到“添加规格值”；需要先确认规格类型已存在')
-    throw new Error('找不到“添加规格值”按钮')
+    if (typeButton) throw new Error('只找到“添加规格类型”，未找到“颜色分类”下的添加规格值入口')
+    throw new Error('找不到“颜色分类”下的添加规格值按钮')
   }
 
   const beforeInputs = getEditableInputs()
