@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>抖店批量直播间规格</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <section>
+        <p class="eyebrow">doEcommerceTag</p>
+        <h1>抖店批量直播间规格</h1>
+        <p class="muted">导入 Excel，写入直播间编号与商家编码映射。</p>
+      </section>
+
+      <section class="card">
+        <label class="file-label">
+          <span>导入 Excel</span>
+          <input id="fileInput" type="file" accept=".xlsx,.xls,.csv" />
+        </label>
+        <div id="meta" class="meta">暂无导入数据</div>
+        <div class="actions">
+          <button id="clearBtn" class="secondary">清空配置</button>
+          <button id="refreshBtn" class="primary">刷新状态</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <div class="section-title">最近日志</div>
+        <div id="logs" class="logs empty">暂无执行日志</div>
+      </section>
+
+      <section class="hint">
+        <strong>字段约定</strong>
+        <ul>
+          <li>直播间编号：如 D401</li>
+          <li>店铺编号：会写入页面的商家编码字段</li>
+        </ul>
+      </section>
+    </main>
+
+    <script src="lib/xlsx.full.min.js"></script>
+    <script src="popup.js"></script>
+  </body>
+</html>

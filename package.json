@@ -1,0 +1,9 @@
+{
+  "name": "doecommercetag-extension",
+  "private": true,
+  "version": "0.1.0",
+  "description": "抖店批量直播间规格 Chrome Extension",
+  "scripts": {
+    "check": "node scripts/check.js"
+  }
+}

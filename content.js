@@ -1,0 +1,405 @@
+const EXTENSION_STATE = {
+  panelInjected: false,
+  launcherInjected: false,
+  observerStarted: false,
+}
+
+const STORAGE_KEYS = {
+  mapping: 'mappingData',
+  meta: 'mappingMeta',
+}
+
+function isDoudianHost() {
+  return location.hostname === 'fxg.jinritemai.com'
+}
+
+function isProductCreateOrEditUrl() {
+  const href = location.href
+  return href.includes('/ffa/g/create') || href.includes('/ffa/create') || href.includes('/ffa/g/edit')
+}
+
+function hasTargetPageText() {
+  const text = document.body?.innerText || ''
+  return ['商品发布', '发布商品', '编辑商品', '尺码表', '商品规格', '商家编码'].some((fragment) => text.includes(fragment))
+}
+
+function isTargetPage() {
+  return isDoudianHost() && isProductCreateOrEditUrl() && hasTargetPageText()
+}
+
+function createLauncher() {
+  const button = document.createElement('button')
+  button.id = 'doecommerce-tag-launcher'
+  button.textContent = '批量直播间规格'
+  button.addEventListener('click', () => {
+    const panel = document.getElementById('doecommerce-tag-panel')
+    if (!panel) return
+    panel.classList.toggle('dde-hidden')
+    refreshPanelData()
+  })
+  document.body.appendChild(button)
+}
+
+function createPanel() {
+  const panel = document.createElement('aside')
+  panel.id = 'doecommerce-tag-panel'
+  panel.className = 'dde-hidden'
+  panel.innerHTML = `
+    <div class="dde-panel-header">
+      <h3>批量直播间规格</h3>
+      <p>导入 Excel 后，在这里预览并执行。第一版默认写入“商家编码”字段。</p>
+    </div>
+    <div class="dde-panel-body">
+      <div class="dde-kv"><strong>页面识别</strong><span id="dde-page-status">检查中</span></div>
+      <div class="dde-kv"><strong>导入数据</strong><span id="dde-data-status">未导入</span></div>
+      <div class="dde-actions">
+        <button class="dde-button secondary" id="dde-refresh-btn">刷新面板</button>
+        <button class="dde-button primary" id="dde-preview-btn">扫描预览</button>
+        <button class="dde-button primary" id="dde-run-btn">开始执行</button>
+      </div>
+      <div class="dde-status" id="dde-summary-box">
+        <div>等待操作</div>
+        <div class="dde-status-line">先在插件弹窗里导入 Excel，再回到此页执行。</div>
+      </div>
+      <div class="dde-preview" id="dde-preview-box">
+        <strong>预览数据</strong>
+        <div class="dde-status-line">暂无</div>
+      </div>
+      <div class="dde-log" id="dde-log-box">
+        <strong>执行日志</strong>
+        <div class="dde-status-line">尚未开始</div>
+      </div>
+    </div>
+  `
+  document.body.appendChild(panel)
+
+  panel.querySelector('#dde-refresh-btn')?.addEventListener('click', refreshPanelData)
+  panel.querySelector('#dde-preview-btn')?.addEventListener('click', previewExecution)
+  panel.querySelector('#dde-run-btn')?.addEventListener('click', runExecution)
+}
+
+function setText(id, text) {
+  const node = document.getElementById(id)
+  if (node) node.textContent = text
+}
+
+function setHtml(id, html) {
+  const node = document.getElementById(id)
+  if (node) node.innerHTML = html
+}
+
+function getStorageSnapshot() {
+  return new Promise((resolve) => {
+    chrome.storage.local.get([STORAGE_KEYS.mapping, STORAGE_KEYS.meta], (result) => {
+      resolve({
+        items: Array.isArray(result[STORAGE_KEYS.mapping]) ? result[STORAGE_KEYS.mapping] : [],
+        meta: result[STORAGE_KEYS.meta] || null,
+      })
+    })
+  })
+}
+
+function getImportedAtText(meta) {
+  if (!meta?.importedAt) return '-'
+  return new Date(meta.importedAt).toLocaleString('zh-CN', { hour12: false })
+}
+
+async function refreshPanelData() {
+  setText('dde-page-status', isTargetPage() ? '已识别商品创建/编辑页' : '当前页不匹配')
+  const snapshot = await getStorageSnapshot()
+  const count = snapshot.items.length
+  setHtml('dde-data-status', count ? `${count} 条（${getImportedAtText(snapshot.meta)}）` : '未导入')
+
+  if (!count) {
+    setHtml('dde-preview-box', '<strong>预览数据</strong><div class="dde-status-line">暂无导入数据</div>')
+    return
+  }
+
+  const previewRows = snapshot.items.slice(0, 8).map((item) => `
+    <tr>
+      <td>${item.liveRoomCode}</td>
+      <td>${item.shopCode}</td>
+      <td>${item.remark || '-'}</td>
+    </tr>
+  `).join('')
+
+  setHtml('dde-preview-box', `
+    <strong>预览数据</strong>
+    <table>
+      <thead><tr><th>直播间编号</th><th>商家编码</th><th>备注</th></tr></thead>
+      <tbody>${previewRows}</tbody>
+    </table>
+  `)
+}
+
+function collectCurrentPageLiveRoomCodes() {
+  const text = document.body?.innerText || ''
+  const matches = text.match(/D\d{3,4}/g) || []
+  return [...new Set(matches)]
+}
+
+async function previewExecution() {
+  const snapshot = await getStorageSnapshot()
+  if (!snapshot.items.length) {
+    setHtml('dde-summary-box', '<div class="dde-badge error">未导入 Excel</div><div class="dde-status-line">请先在插件弹窗导入数据。</div>')
+    return
+  }
+
+  const existingCodes = collectCurrentPageLiveRoomCodes()
+  const existingSet = new Set(existingCodes)
+  const duplicated = snapshot.items.filter((item) => existingSet.has(item.liveRoomCode))
+  const pending = snapshot.items.filter((item) => !existingSet.has(item.liveRoomCode))
+
+  setHtml('dde-summary-box', `
+    <div><span class="dde-badge success">Excel 总数 ${snapshot.items.length}</span></div>
+    <div class="dde-status-line">页面已存在：${duplicated.length}；待创建：${pending.length}</div>
+    <div class="dde-status-line">第一版执行器将以“商家编码”字段为目标。</div>
+  `)
+
+  chrome.runtime.sendMessage({
+    type: 'APPEND_EXECUTION_LOG',
+    summary: `预览完成：总 ${snapshot.items.length}，待创建 ${pending.length}`,
+    details: {
+      phase: 'preview',
+      total: snapshot.items.length,
+      existing: duplicated.length,
+      pending: pending.length,
+      url: location.href,
+    },
+  })
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+function randomBetween(min, max) {
+  return Math.floor(Math.random() * (max - min + 1)) + min
+}
+
+function getVisibleElements(selector) {
+  return [...document.querySelectorAll(selector)].filter((node) => {
+    const rect = node.getBoundingClientRect()
+    const style = window.getComputedStyle(node)
+    return rect.width > 0 && rect.height > 0 && style.visibility !== 'hidden' && style.display !== 'none'
+  })
+}
+
+function getElementText(node) {
+  return String(node?.innerText || node?.textContent || '').trim()
+}
+
+function findClickableByText(textList) {
+  const candidates = getVisibleElements('button, [role="button"], a, span, div')
+  return candidates.find((node) => {
+    const text = getElementText(node)
+    return textList.some((fragment) => text === fragment || text.includes(fragment))
+  })
+}
+
+function clickElement(el) {
+  if (!el) throw new Error('元素不存在')
+  el.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }))
+  el.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+  el.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }))
+  el.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+}
+
+function setNativeInputValue(input, value) {
+  if (!input) throw new Error('输入框不存在')
+  const prototype = Object.getPrototypeOf(input)
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'value')
+  if (descriptor?.set) {
+    descriptor.set.call(input, value)
+  } else {
+    input.value = value
+  }
+  input.dispatchEvent(new Event('input', { bubbles: true }))
+  input.dispatchEvent(new Event('change', { bubbles: true }))
+  input.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true }))
+  input.dispatchEvent(new KeyboardEvent('keyup', { bubbles: true }))
+}
+
+function findSpecAddButton() {
+  return findClickableByText(['添加规格值', '添加规格', '新增规格值', '新增规格'])
+}
+
+function getEditableInputs() {
+  return getVisibleElements('input:not([disabled]), textarea:not([disabled])')
+}
+
+function findLastEmptyTextInput() {
+  const inputs = getEditableInputs().filter((input) => {
+    const type = String(input.getAttribute('type') || 'text').toLowerCase()
+    return ['text', 'search', ''].includes(type) && !input.value
+  })
+  return inputs[inputs.length - 1] || null
+}
+
+async function createSpecValue(liveRoomCode) {
+  if (collectCurrentPageLiveRoomCodes().includes(liveRoomCode)) {
+    return { status: 'skipped', message: '页面已存在规格值' }
+  }
+
+  const addButton = findSpecAddButton()
+  if (!addButton) throw new Error('找不到“添加规格值”按钮')
+  clickElement(addButton)
+  await sleep(350)
+
+  const input = findLastEmptyTextInput()
+  if (!input) throw new Error('点击添加后找不到空规格输入框')
+  setNativeInputValue(input, liveRoomCode)
+  await sleep(500)
+
+  return { status: 'success', message: '规格值已输入' }
+}
+
+function findRowByLiveRoomCode(liveRoomCode) {
+  const selectors = [
+    'tr',
+    '[class*="table"] [class*="row"]',
+    '[class*="Table"] [class*="Row"]',
+    '[data-row-key]',
+    '.semi-table-row',
+    '.arco-table-tr',
+  ]
+  for (const selector of selectors) {
+    const row = getVisibleElements(selector).find((node) => getElementText(node).includes(liveRoomCode))
+    if (row) return row
+  }
+  return null
+}
+
+function findMerchantCodeInputInRow(row) {
+  if (!row) return null
+  const inputs = [...row.querySelectorAll('input:not([disabled]), textarea:not([disabled])')]
+  if (inputs.length === 1) return inputs[0]
+
+  const labels = ['商家编码', '店铺编号', 'SKU编码', '编码']
+  const rowText = getElementText(row)
+  if (!labels.some((label) => rowText.includes(label))) {
+    return inputs[inputs.length - 1] || null
+  }
+
+  return inputs.find((input) => {
+    const placeholder = String(input.getAttribute('placeholder') || '')
+    const ariaLabel = String(input.getAttribute('aria-label') || '')
+    return labels.some((label) => placeholder.includes(label) || ariaLabel.includes(label))
+  }) || inputs[inputs.length - 1] || null
+}
+
+function writeMerchantCode(liveRoomCode, shopCode) {
+  const row = findRowByLiveRoomCode(liveRoomCode)
+  if (!row) throw new Error(`找不到 ${liveRoomCode} 对应 SKU 行`)
+  const input = findMerchantCodeInputInRow(row)
+  if (!input) throw new Error(`找不到 ${liveRoomCode} 的商家编码输入框`)
+  setNativeInputValue(input, shopCode)
+  return { status: 'success', message: '商家编码已写入' }
+}
+
+function renderExecutionResults(results) {
+  const success = results.filter((item) => item.status === 'success').length
+  const skipped = results.filter((item) => item.status === 'skipped').length
+  const failed = results.filter((item) => item.status === 'failed').length
+  const rows = results.slice(-12).reverse().map((item) => `
+    <tr>
+      <td>${item.liveRoomCode}</td>
+      <td>${item.shopCode}</td>
+      <td><span class="dde-badge ${item.status === 'success' ? 'success' : item.status === 'failed' ? 'error' : 'warn'}">${item.status}</span></td>
+      <td>${item.message || '-'}</td>
+    </tr>
+  `).join('')
+
+  setHtml('dde-log-box', `
+    <strong>执行日志</strong>
+    <div class="dde-status-line">成功：${success}；跳过：${skipped}；失败：${failed}</div>
+    <div class="dde-preview" style="margin-top: 8px; padding: 8px;">
+      <table>
+        <thead><tr><th>直播间</th><th>商家编码</th><th>状态</th><th>说明</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>
+  `)
+}
+
+async function runExecution() {
+  const snapshot = await getStorageSnapshot()
+  if (!snapshot.items.length) {
+    setHtml('dde-log-box', '<strong>执行日志</strong><div class="dde-status-line">未导入 Excel，无法执行。</div>')
+    return
+  }
+
+  const confirmed = window.confirm(`即将尝试处理 ${snapshot.items.length} 条规格。插件不会点击保存/发布。是否开始？`)
+  if (!confirmed) return
+
+  const results = []
+  for (const item of snapshot.items) {
+    try {
+      setHtml('dde-summary-box', `<div><span class="dde-badge warn">执行中</span></div><div class="dde-status-line">正在处理 ${item.liveRoomCode} -> ${item.shopCode}</div>`)
+      const createResult = await createSpecValue(item.liveRoomCode)
+      await sleep(randomBetween(600, 1000))
+      const writeResult = writeMerchantCode(item.liveRoomCode, item.shopCode)
+      results.push({
+        ...item,
+        status: createResult.status === 'skipped' ? 'skipped' : writeResult.status,
+        message: `${createResult.message}；${writeResult.message}`,
+      })
+    } catch (error) {
+      results.push({
+        ...item,
+        status: 'failed',
+        message: error.message || '执行失败',
+      })
+    }
+
+    renderExecutionResults(results)
+    await sleep(randomBetween(500, 1200))
+  }
+
+  const failed = results.filter((item) => item.status === 'failed').length
+  setHtml('dde-summary-box', `
+    <div><span class="dde-badge ${failed ? 'warn' : 'success'}">执行完成</span></div>
+    <div class="dde-status-line">总数：${results.length}；失败：${failed}。请人工检查后再保存/发布。</div>
+  `)
+
+  chrome.runtime.sendMessage({
+    type: 'APPEND_EXECUTION_LOG',
+    summary: `执行完成：总 ${results.length}，失败 ${failed}`,
+    details: {
+      phase: 'run',
+      total: results.length,
+      failed,
+      results,
+      url: location.href,
+    },
+  })
+}
+
+function ensureUiInjected() {
+  if (!isTargetPage()) return
+
+  if (!EXTENSION_STATE.launcherInjected && !document.getElementById('doecommerce-tag-launcher')) {
+    createLauncher()
+    EXTENSION_STATE.launcherInjected = true
+  }
+
+  if (!EXTENSION_STATE.panelInjected && !document.getElementById('doecommerce-tag-panel')) {
+    createPanel()
+    EXTENSION_STATE.panelInjected = true
+    refreshPanelData()
+  }
+}
+
+function bootObserver() {
+  if (EXTENSION_STATE.observerStarted) return
+  EXTENSION_STATE.observerStarted = true
+
+  const observer = new MutationObserver(() => {
+    ensureUiInjected()
+  })
+
+  observer.observe(document.documentElement, { childList: true, subtree: true })
+  ensureUiInjected()
+}
+
+bootObserver()

@@ -1,0 +1,25 @@
+{
+  "manifest_version": 3,
+  "name": "抖店批量直播间规格",
+  "version": "0.1.0",
+  "description": "在抖店商品创建/编辑页批量创建直播间规格，并填充商家编码。",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": [
+    "https://fxg.jinritemai.com/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "抖店批量直播间规格",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://fxg.jinritemai.com/*"],
+      "js": ["lib/xlsx.full.min.js", "content.js"],
+      "css": ["styles.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
