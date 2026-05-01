@@ -47,6 +47,20 @@
 .dde-kv { display: grid; grid-template-columns: 90px 1fr; gap: 8px; font-size: 13px; }
 .dde-kv strong { color: var(--dde-text); }
 .dde-actions { display: flex; gap: 10px; flex-wrap: wrap; }
+.dde-run-options {
+  border: 1px solid #edf2f8;
+  border-radius: 12px;
+  padding: 10px 12px;
+  background: #fafcff;
+  font-size: 13px;
+}
+.dde-run-options label { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.dde-run-options select {
+  border: 1px solid var(--dde-border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  background: #fff;
+}
 .dde-button { border: none; border-radius: 10px; cursor: pointer; font-weight: 700; padding: 10px 14px; }
 .dde-button.primary { background: var(--dde-primary); color: #fff; }
 .dde-button.secondary { background: var(--dde-primary-soft); color: #1f3ca8; }

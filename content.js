@@ -52,6 +52,16 @@ function createPanel() {
     <div class="dde-panel-body">
       <div class="dde-kv"><strong>页面识别</strong><span id="dde-page-status">检查中</span></div>
       <div class="dde-kv"><strong>导入数据</strong><span id="dde-data-status">未导入</span></div>
+      <div class="dde-run-options">
+        <label>执行数量
+          <select id="dde-run-limit">
+            <option value="1" selected>先试 1 条</option>
+            <option value="5">试 5 条</option>
+            <option value="10">试 10 条</option>
+            <option value="all">全部</option>
+          </select>
+        </label>
+      </div>
       <div class="dde-actions">
         <button class="dde-button secondary" id="dde-refresh-btn">刷新面板</button>
         <button class="dde-button secondary" id="dde-diagnose-btn">诊断页面</button>
@@ -577,6 +587,14 @@ function renderExecutionResults(results) {
   `)
 }
 
+function getRunItems(items) {
+  const select = document.getElementById('dde-run-limit')
+  const value = select?.value || '1'
+  if (value === 'all') return items
+  const limit = Number(value) || 1
+  return items.slice(0, limit)
+}
+
 async function runExecution() {
   const snapshot = await getStorageSnapshot()
   if (!snapshot.items.length) {
@@ -584,11 +602,12 @@ async function runExecution() {
     return
   }
 
-  const confirmed = window.confirm(`即将尝试处理 ${snapshot.items.length} 条规格。插件不会点击保存/发布。是否开始？`)
+  const runItems = getRunItems(snapshot.items)
+  const confirmed = window.confirm(`即将尝试处理 ${runItems.length}/${snapshot.items.length} 条规格。插件不会点击保存/发布。建议先只试 1 条。是否开始？`)
   if (!confirmed) return
 
   const results = []
-  for (const item of snapshot.items) {
+  for (const item of runItems) {
     try {
       setHtml('dde-summary-box', `<div><span class="dde-badge warn">执行中</span></div><div class="dde-status-line">正在处理 ${item.liveRoomCode} -> ${item.shopCode}</div>`)
       const createResult = await createSpecValue(item.liveRoomCode)
