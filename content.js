@@ -14,6 +14,7 @@ const EXTENSION_STATE = {
   latestSavedDraftBase: null,
   lastSaveProbe: null,
   lastPatchedSubmitPreview: null,
+  baseCapture: null,
 }
 
 function sendRuntimeMessage(message) {
@@ -113,9 +114,39 @@ async function injectHttpRecorder() {
 
     EXTENSION_STATE.httpRecords.push(payload)
     EXTENSION_STATE.httpRecords = EXTENSION_STATE.httpRecords.slice(-1000)
-    updateLiveSchemaSnapshotFromRecord({ ...payload, tabUrl: location.href })
+    const record = { ...payload, tabUrl: location.href }
+    const beforeBaseAt = EXTENSION_STATE.latestSavedDraftBase?.capturedAt || 0
+    updateLiveSchemaSnapshotFromRecord(record)
+
+    const capture = EXTENSION_STATE.baseCapture
+    let captureHandled = false
+    if (capture?.active) {
+      capture.seen += 1
+      const afterBaseAt = EXTENSION_STATE.latestSavedDraftBase?.capturedAt || 0
+      if (afterBaseAt && afterBaseAt !== beforeBaseAt) {
+        const pendingAction = capture.pendingAction || ''
+        await finishAutoBaseCapture()
+        captureHandled = true
+        setHtml('dde-summary-box', `
+          <div><span class="dde-badge success">已自动获取草稿基座</span></div>
+          <div class="dde-status-line">命中：${escapeHtml(EXTENSION_STATE.latestSavedDraftBase?.url || '-').slice(0, 160)}</div>
+          <div class="dde-status-line">已检查业务请求 ${capture.seen}/${capture.maxRecords} 条，录制已自动停止。${pendingAction ? '正在继续执行后续动作。' : '现在可以继续提交草稿。'}</div>
+        `)
+        if (pendingAction === 'submit-all') window.setTimeout(() => { void submitAllCreateDraft() }, 300)
+        if (pendingAction === 'submit-single') window.setTimeout(() => { void submitSingleCreateDraft() }, 300)
+      } else if (capture.seen >= capture.maxRecords) {
+        await finishAutoBaseCapture({ error: `连续 ${capture.maxRecords} 条业务请求内没有捕获到成功的 editWithSchema/addWithSchema 保存包` })
+        captureHandled = true
+        setHtml('dde-summary-box', `
+          <div><span class="dde-badge error">自动获取草稿基座失败</span></div>
+          <div class="dde-status-line">连续 ${capture.maxRecords} 条业务请求内没有捕获到成功的 editWithSchema/addWithSchema 保存包。</div>
+          <div class="dde-status-line">请确认当前是草稿商品页，然后重试；必要时手工点一次保存草稿。</div>
+        `)
+      }
+    }
+
     renderHttpRecorderStatus()
-    renderParsedSummary()
+    if (!captureHandled) renderParsedSummary()
 
     await sendRuntimeMessage({
       type: 'APPEND_HTTP_RECORD',
@@ -143,6 +174,7 @@ function createPanel() {
         <button class="dde-button secondary" id="dde-rec-start-btn">开始录制请求</button>
         <button class="dde-button secondary" id="dde-rec-stop-btn">停止录制</button>
         <button class="dde-button secondary" id="dde-rec-export-btn">导出请求</button>
+        <button class="dde-button primary" id="dde-auto-base-btn">自动获取草稿基座</button>
         <button class="dde-button primary" id="dde-sync-btn">同步当前页面状态</button>
         <button class="dde-button primary" id="dde-parse-btn">解析规格列表</button>
         <button class="dde-button primary" id="dde-check-btn">检查编码映射</button>
@@ -178,6 +210,7 @@ function createPanel() {
   panel.querySelector('#dde-rec-start-btn')?.addEventListener('click', startHttpRecording)
   panel.querySelector('#dde-rec-stop-btn')?.addEventListener('click', stopHttpRecording)
   panel.querySelector('#dde-rec-export-btn')?.addEventListener('click', exportHttpRecords)
+  panel.querySelector('#dde-auto-base-btn')?.addEventListener('click', autoCaptureDraftBase)
   panel.querySelector('#dde-sync-btn')?.addEventListener('click', syncCurrentPageState)
   panel.querySelector('#dde-parse-btn')?.addEventListener('click', refreshPanelData)
   panel.querySelector('#dde-check-btn')?.addEventListener('click', checkMappingAgainstCurrentProduct)
@@ -271,13 +304,18 @@ function renderHttpRecorderStatus() {
     : `快照：暂无｜最后编辑 ${formatTime(EXTENSION_STATE.lastUserEditAt)}`
   const savedBase = EXTENSION_STATE.latestSavedDraftBase
   const saveProbe = EXTENSION_STATE.lastSaveProbe
+  const capture = EXTENSION_STATE.baseCapture
   const savedBaseLine = savedBase
     ? `手工保存基座：${savedBase.mode}｜${escapeHtml(savedBase.url || '-').slice(0, 80)}｜${formatTime(savedBase.capturedAt)}｜product_id ${escapeHtml(savedBase.productId || '-')}`
     : (saveProbe ? `保存请求命中但未成基座：${escapeHtml(saveProbe.reason || '-')}｜${escapeHtml(saveProbe.url || '-').slice(0, 80)}｜状态 ${escapeHtml(saveProbe.status || '-')}` : '手工保存基座：暂无')
+  const captureLine = capture?.active
+    ? `自动捕获基座中：已看 ${capture.seen}/${capture.maxRecords} 条业务请求；等待 editWithSchema/addWithSchema 成功保存包`
+    : (capture?.error ? `自动捕获基座失败：${escapeHtml(capture.error)}` : '')
 
   setHtml('dde-recorder-status-box', `
     <div>${statusBadge} ${syncBadgeMap[EXTENSION_STATE.syncStatus] || syncBadgeMap.idle}</div>
     <div class="dde-status-line">已捕获业务请求：${records.length} 条</div>
+    ${captureLine ? `<div class="dde-status-line">${captureLine}</div>` : ''}
     <div class="dde-status-line">${lastLine}</div>
     <div class="dde-status-line">${syncLine}</div>
     <div class="dde-status-line">${savedBaseLine}</div>
@@ -293,6 +331,7 @@ function renderHttpRecorderStatus() {
   setHtml('dde-log-box', `
     <strong>HTTP 请求录制</strong>
     <div class="dde-status-line">状态：${EXTENSION_STATE.recorderEnabled ? '录制中' : '已停止'}；已捕获业务请求：${records.length} 条</div>
+    ${captureLine ? `<div class="dde-status-line">${captureLine}</div>` : ''}
     <div class="dde-status-line">已自动过滤埋点、静态资源、问卷/ABTest/VC 设置接口。</div>
     <div class="dde-status-line">${lastLine}</div>
     <div class="dde-status-line">${syncLine}</div>
@@ -339,6 +378,40 @@ async function startHttpRecording() {
 }
 
 async function stopHttpRecording() {
+  await sendRuntimeMessage({ type: 'SET_HTTP_RECORDER_ENABLED', enabled: false })
+  controlHttpRecorder('stop')
+  EXTENSION_STATE.recorderEnabled = false
+  if (EXTENSION_STATE.baseCapture?.active) EXTENSION_STATE.baseCapture.active = false
+  renderHttpRecorderStatus()
+}
+
+async function startAutoBaseCapture({ maxRecords = 30, pendingAction = '' } = {}) {
+  await injectHttpRecorder()
+  await sendRuntimeMessage({ type: 'CLEAR_HTTP_RECORDS' })
+  await sendRuntimeMessage({ type: 'SET_HTTP_RECORDER_ENABLED', enabled: true })
+  EXTENSION_STATE.httpRecords = []
+  EXTENSION_STATE.liveSchemaSnapshot = null
+  EXTENSION_STATE.latestSavedDraftBase = null
+  EXTENSION_STATE.lastSaveProbe = null
+  EXTENSION_STATE.recorderEnabled = true
+  EXTENSION_STATE.syncStatus = 'idle'
+  EXTENSION_STATE.syncRequestedAt = 0
+  EXTENSION_STATE.baseCapture = {
+    active: true,
+    seen: 0,
+    maxRecords,
+    startedAt: Date.now(),
+    error: '',
+    pendingAction,
+  }
+  controlHttpRecorder('start')
+  renderHttpRecorderStatus()
+}
+
+async function finishAutoBaseCapture({ error = '' } = {}) {
+  if (!EXTENSION_STATE.baseCapture) return
+  EXTENSION_STATE.baseCapture.active = false
+  EXTENSION_STATE.baseCapture.error = error
   await sendRuntimeMessage({ type: 'SET_HTTP_RECORDER_ENABLED', enabled: false })
   controlHttpRecorder('stop')
   EXTENSION_STATE.recorderEnabled = false
@@ -1103,10 +1176,14 @@ function findNextPatchableItem(validItems, productState) {
   return { item: null, patch: null }
 }
 
-async function prepareDraftSubmissionBase() {
+async function prepareDraftSubmissionBase({ autoCaptureAction = '' } = {}) {
   const savedBase = EXTENSION_STATE.latestSavedDraftBase
   if (!savedBase && !isLikelyCreatePageNow()) {
-    return { errorHtml: '<div><span class="dde-badge error">缺少手工保存基座</span></div><div class="dde-status-line">旧商品/草稿页请先开启录制并手工保存一次草稿，插件抓到 editWithSchema 基座后再提交。</div>' }
+    if (autoCaptureAction) {
+      await startAutoBaseCapture({ maxRecords: 30, pendingAction: autoCaptureAction })
+      return { waitingForBase: true }
+    }
+    return { errorHtml: '<div><span class="dde-badge error">缺少手工保存基座</span></div><div class="dde-status-line">旧商品/草稿页请先点“自动获取草稿基座”，然后点击页面“保存草稿”。插件会精准等待成功保存包并自动停止。</div>' }
   }
 
   if (!savedBase && !hasFreshSyncedSnapshot()) {
@@ -1156,6 +1233,19 @@ function submitStructuredPatch({ base, productState, structuredPatch, title, tar
   submitAddWithSchema(base.url, requestBody, submitToken)
 }
 
+async function autoCaptureDraftBase() {
+  if (!location.href.includes('entrance=draft') && !location.href.includes('/ffa/g/edit')) {
+    setHtml('dde-summary-box', '<div><span class="dde-badge error">只允许草稿商品</span></div><div class="dde-status-line">请进入草稿箱商品详情页后再自动获取基座。</div>')
+    return
+  }
+  await startAutoBaseCapture({ maxRecords: 30 })
+  setHtml('dde-summary-box', `
+    <div><span class="dde-badge warn">正在自动获取草稿基座</span></div>
+    <div class="dde-status-line">插件已自动开启精准录制，只等待成功的 editWithSchema/addWithSchema 保存包。</div>
+    <div class="dde-status-line">请现在点击页面「保存草稿」。最多检查 30 条业务请求，命中后会自动停止录制。</div>
+  `)
+}
+
 async function submitSingleCreateDraft() {
   const mappingSnapshot = await getMappingSnapshot()
   const allValidItems = mappingSnapshot.validItems
@@ -1164,7 +1254,15 @@ async function submitSingleCreateDraft() {
     return
   }
 
-  const prepared = await prepareDraftSubmissionBase()
+  const prepared = await prepareDraftSubmissionBase({ autoCaptureAction: 'submit-single' })
+  if (prepared.waitingForBase) {
+    setHtml('dde-summary-box', `
+      <div><span class="dde-badge warn">等待草稿基座</span></div>
+      <div class="dde-status-line">插件已自动开启精准录制。请点击页面「保存草稿」，捕获成功后会自动继续提交 1 条。</div>
+      <div class="dde-status-line">最多检查 30 条业务请求，未命中会自动停止并报错。</div>
+    `)
+    return
+  }
   if (prepared.errorHtml) {
     setHtml('dde-summary-box', prepared.errorHtml)
     return
@@ -1194,7 +1292,15 @@ async function submitAllCreateDraft() {
     return
   }
 
-  const prepared = await prepareDraftSubmissionBase()
+  const prepared = await prepareDraftSubmissionBase({ autoCaptureAction: 'submit-all' })
+  if (prepared.waitingForBase) {
+    setHtml('dde-summary-box', `
+      <div><span class="dde-badge warn">等待草稿基座</span></div>
+      <div class="dde-status-line">插件已自动开启精准录制。请点击页面「保存草稿」，捕获成功后会自动继续提交全部到草稿。</div>
+      <div class="dde-status-line">最多检查 30 条业务请求，未命中会自动停止并报错。</div>
+    `)
+    return
+  }
   if (prepared.errorHtml) {
     setHtml('dde-summary-box', prepared.errorHtml)
     return

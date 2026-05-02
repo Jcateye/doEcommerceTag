@@ -274,3 +274,27 @@ interface ParsedSkuRow {
 1. 先做功能 4（检查映射）
 2. 再做功能 1/2/3 的 patch preview
 3. 最后补提交接口
+
+---
+
+## 自动草稿基座捕获（已实现）
+
+为了避免用户手工先点「开始录制请求」，插件增加「自动获取草稿基座」流程：
+
+1. 仅允许草稿商品页或编辑态（`entrance=draft` / `/ffa/g/edit`）。
+2. 插件自动清空旧请求并开启页面内 recorder。
+3. 不假设“下一条请求”就是保存请求；而是持续监听业务请求。
+4. 只接受成功保存包作为基座：
+   - URL 命中 `/product/tproduct/editWithSchema` 或 `/product/tproduct/addWithSchema`
+   - request body 存在完整 `schema.model`
+   - response body JSON 中 `code === 0`
+5. 命中后自动停止录制，并将完整 request body 保存为 `latestSavedDraftBase`。
+6. 最多检查 30 条业务请求；超过仍未命中则自动停止并提示重试。
+7. 如果用户直接点「提交 1 条到草稿」或「提交全部到草稿」但当前没有基座，插件会自动进入基座捕获模式；用户点击页面「保存草稿」后，命中基座会自动继续原提交动作。
+
+这个设计的目的：
+
+- 避免长时间全量录制。
+- 避免误用非保存请求做基座。
+- 避免依赖“下一条请求”这种不稳定假设。
+- 保持基座始终来自抖店页面真实成功保存的完整 `editWithSchema/addWithSchema` request body。
