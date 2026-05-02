@@ -175,47 +175,49 @@ function createPanel() {
   panel.className = 'dde-hidden'
   panel.innerHTML = `
     <div class="dde-panel-header">
-      <h3>HTTP 规格分析</h3>
-      <p>已移除 DOM 自动执行。当前仅保留 HTTP 录制、导出和规格/SKU 解析。</p>
+      <h3>直播间编码批量助手</h3>
+      <p>只处理草稿商品：创建颜色分类、填写商家编码、检查映射。</p>
     </div>
     <div class="dde-panel-body">
-      <div class="dde-kv"><strong>页面识别</strong><span id="dde-page-status">检查中</span></div>
       <div class="dde-kv"><strong>当前商品</strong><span id="dde-product-status">等待解析</span></div>
       <div class="dde-kv"><strong>映射配置</strong><span id="dde-mapping-status">等待读取</span></div>
-      <div class="dde-actions">
-        <button class="dde-button secondary" id="dde-refresh-btn">刷新面板</button>
-        <button class="dde-button secondary" id="dde-rec-start-btn">开始录制请求</button>
-        <button class="dde-button secondary" id="dde-rec-stop-btn">停止录制</button>
-        <button class="dde-button secondary" id="dde-rec-export-btn">导出请求</button>
-        <button class="dde-button primary" id="dde-auto-base-btn">自动获取草稿基座</button>
-        <button class="dde-button primary" id="dde-sync-btn">同步当前页面状态</button>
-        <button class="dde-button primary" id="dde-parse-btn">解析规格列表</button>
-        <button class="dde-button primary" id="dde-check-btn">检查编码映射</button>
+      <div class="dde-actions dde-main-actions">
+        <button class="dde-button primary" id="dde-auto-base-btn">获取当前草稿数据</button>
+        <button class="dde-button primary" id="dde-submit-create-only-btn">只创建直播间编码</button>
+        <button class="dde-button primary" id="dde-submit-fill-only-btn">只填写商家编码</button>
+        <button class="dde-button primary" id="dde-submit-upsert-btn">创建并填写编码</button>
+        <button class="dde-button secondary" id="dde-check-btn">检查编码是否正确</button>
       </div>
-      <div class="dde-actions">
-        <button class="dde-button secondary" id="dde-preview-create-btn">预览：仅创建颜色分类</button>
-        <button class="dde-button secondary" id="dde-preview-fill-btn">预览：仅填写商家编码</button>
-        <button class="dde-button secondary" id="dde-preview-upsert-btn">预览：同时处理</button>
-        <button class="dde-button primary" id="dde-submit-create-only-btn">提交：仅创建颜色分类</button>
-        <button class="dde-button primary" id="dde-submit-fill-only-btn">提交：仅填写商家编码</button>
-        <button class="dde-button primary" id="dde-submit-upsert-btn">提交：同时处理</button>
-        <button class="dde-button primary" id="dde-submit-create-btn">提交 1 条到草稿</button>
-      </div>
-      <div class="dde-status" id="dde-recorder-status-box">
-        <div><span class="dde-badge warn">HTTP 录制未开启</span></div>
-        <div class="dde-status-line">会自动过滤埋点和静态资源，尽量保留业务请求。</div>
+      <details class="dde-debug-panel">
+        <summary>调试工具</summary>
+        <div class="dde-actions">
+          <button class="dde-button secondary" id="dde-refresh-btn">刷新面板</button>
+          <button class="dde-button secondary" id="dde-rec-start-btn">开始录制请求</button>
+          <button class="dde-button secondary" id="dde-rec-stop-btn">停止录制</button>
+          <button class="dde-button secondary" id="dde-rec-export-btn">导出请求</button>
+          <button class="dde-button secondary" id="dde-sync-btn">同步页面状态</button>
+          <button class="dde-button secondary" id="dde-parse-btn">解析规格列表</button>
+          <button class="dde-button secondary" id="dde-preview-create-btn">预览：仅创建</button>
+          <button class="dde-button secondary" id="dde-preview-fill-btn">预览：仅填编码</button>
+          <button class="dde-button secondary" id="dde-preview-upsert-btn">预览：同时处理</button>
+          <button class="dde-button secondary" id="dde-submit-create-btn">提交 1 条</button>
+        </div>
+      </details>
+      <div class="dde-status dde-compact-status" id="dde-recorder-status-box">
+        <div><span class="dde-badge warn">未获取草稿基座</span></div>
+        <div class="dde-status-line">点击「获取当前草稿数据」，然后按提示点页面保存草稿。</div>
       </div>
       <div class="dde-status" id="dde-summary-box">
         <div>等待操作</div>
-        <div class="dde-status-line">录制后点击「解析规格列表」，从 diagnose_product / schema 请求里提取颜色分类、商家编码、库存。</div>
+        <div class="dde-status-line">先在插件 popup 导入 Excel，再选择上面的操作。</div>
       </div>
       <div class="dde-preview" id="dde-preview-box">
-        <strong>解析结果</strong>
+        <strong>结果</strong>
         <div class="dde-status-line">暂无</div>
       </div>
-      <div class="dde-log" id="dde-log-box">
-        <strong>HTTP 请求录制</strong>
-        <div class="dde-status-line">尚未开始</div>
+      <div class="dde-log dde-debug-only" id="dde-log-box">
+        <strong>调试日志</strong>
+        <div class="dde-status-line">暂无</div>
       </div>
     </div>
   `
