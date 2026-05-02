@@ -142,8 +142,11 @@ async function injectHttpRecorder() {
           <div class="dde-status-line">命中：${escapeHtml(EXTENSION_STATE.latestSavedDraftBase?.url || '-').slice(0, 160)}</div>
           <div class="dde-status-line">已检查业务请求 ${capture.seen}/${capture.maxRecords} 条，录制已自动停止。${pendingAction ? '正在继续执行后续动作。' : '现在可以继续提交草稿。'}</div>
         `)
-        if (pendingAction === 'submit-all') window.setTimeout(() => { void submitAllCreateDraft() }, 300)
         if (pendingAction === 'submit-single') window.setTimeout(() => { void submitSingleCreateDraft() }, 300)
+        if (pendingAction.startsWith('submit-mode:')) {
+          const mode = pendingAction.slice('submit-mode:'.length)
+          window.setTimeout(() => { void submitPatchMode(mode) }, 300)
+        }
       } else if (capture.seen >= capture.maxRecords) {
         await finishAutoBaseCapture({ error: `连续 ${capture.maxRecords} 条业务请求内没有捕获到成功的 editWithSchema/addWithSchema 保存包` })
         captureHandled = true
@@ -193,8 +196,10 @@ function createPanel() {
         <button class="dde-button secondary" id="dde-preview-create-btn">预览：仅创建颜色分类</button>
         <button class="dde-button secondary" id="dde-preview-fill-btn">预览：仅填写商家编码</button>
         <button class="dde-button secondary" id="dde-preview-upsert-btn">预览：同时处理</button>
+        <button class="dde-button primary" id="dde-submit-create-only-btn">提交：仅创建颜色分类</button>
+        <button class="dde-button primary" id="dde-submit-fill-only-btn">提交：仅填写商家编码</button>
+        <button class="dde-button primary" id="dde-submit-upsert-btn">提交：同时处理</button>
         <button class="dde-button primary" id="dde-submit-create-btn">提交 1 条到草稿</button>
-        <button class="dde-button primary" id="dde-submit-all-btn">提交全部到草稿</button>
       </div>
       <div class="dde-status" id="dde-recorder-status-box">
         <div><span class="dde-badge warn">HTTP 录制未开启</span></div>
@@ -227,8 +232,10 @@ function createPanel() {
   panel.querySelector('#dde-preview-create-btn')?.addEventListener('click', () => previewPatchPlan('create-only'))
   panel.querySelector('#dde-preview-fill-btn')?.addEventListener('click', () => previewPatchPlan('fill-code-only'))
   panel.querySelector('#dde-preview-upsert-btn')?.addEventListener('click', () => previewPatchPlan('upsert-both'))
+  panel.querySelector('#dde-submit-create-only-btn')?.addEventListener('click', () => submitPatchMode('create-only'))
+  panel.querySelector('#dde-submit-fill-only-btn')?.addEventListener('click', () => submitPatchMode('fill-code-only'))
+  panel.querySelector('#dde-submit-upsert-btn')?.addEventListener('click', () => submitPatchMode('upsert-both'))
   panel.querySelector('#dde-submit-create-btn')?.addEventListener('click', submitSingleCreateDraft)
-  panel.querySelector('#dde-submit-all-btn')?.addEventListener('click', submitAllCreateDraft)
 }
 
 function setText(id, text) {
@@ -1254,6 +1261,50 @@ async function autoCaptureDraftBase() {
     <div class="dde-status-line">插件已自动开启精准录制，只等待成功的 editWithSchema/addWithSchema 保存包。</div>
     <div class="dde-status-line">请现在点击页面「保存草稿」。最多检查 30 条业务请求，命中后会自动停止录制。</div>
   `)
+}
+
+async function submitPatchMode(mode) {
+  const modeNameMap = {
+    'create-only': '仅创建颜色分类',
+    'fill-code-only': '仅填写商家编码',
+    'upsert-both': '同时处理颜色分类和商家编码',
+  }
+  const pendingAction = `submit-mode:${mode}`
+  const mappingSnapshot = await getMappingSnapshot()
+  const allValidItems = mappingSnapshot.validItems
+  if (!allValidItems.length) {
+    setHtml('dde-summary-box', '<div><span class="dde-badge error">没有可提交数据</span></div><div class="dde-status-line">请先在 popup 导入至少 1 条有效映射。</div>')
+    return
+  }
+
+  const prepared = await prepareDraftSubmissionBase({ autoCaptureAction: pendingAction })
+  if (prepared.waitingForBase) {
+    setHtml('dde-summary-box', `
+      <div><span class="dde-badge warn">等待草稿基座</span></div>
+      <div class="dde-status-line">插件已自动开启精准录制。请点击页面「保存草稿」，捕获成功后会自动继续执行：${escapeHtml(modeNameMap[mode] || mode)}。</div>
+      <div class="dde-status-line">最多检查 30 条业务请求，未命中会自动停止并报错。</div>
+    `)
+    return
+  }
+  if (prepared.errorHtml) {
+    setHtml('dde-summary-box', prepared.errorHtml)
+    return
+  }
+
+  const { base, productState } = prepared
+  const structuredPatch = buildStructuredPatch(mode, allValidItems, productState)
+  if (!structuredPatch.createSpecValues.length && !structuredPatch.createSkus.length && !structuredPatch.updateSkuCodes.length) {
+    setHtml('dde-summary-box', `<div><span class="dde-badge warn">无需提交</span></div><div class="dde-status-line">模式：${escapeHtml(modeNameMap[mode] || mode)}；Excel 里的有效映射在当前模型下都没有新变更。</div>`)
+    return
+  }
+
+  submitStructuredPatch({
+    base,
+    productState,
+    structuredPatch,
+    title: `正在提交：${modeNameMap[mode] || mode}`,
+    targetLine: `本次模式：${modeNameMap[mode] || mode}；处理 Excel 有效映射 ${allValidItems.length} 条。`,
+  })
 }
 
 async function submitSingleCreateDraft() {
