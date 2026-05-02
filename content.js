@@ -101,11 +101,21 @@ async function injectHttpRecorder() {
 
     if (payload.type === 'submit-result') {
       EXTENSION_STATE.lastSubmitResult = payload
+      const responseJson = parseJsonSafe(payload.responseBody || '')
+      const appCode = responseJson?.code ?? responseJson?.errno
+      const matchedSubmit = payload.submitToken && payload.submitToken === EXTENSION_STATE.lastPatchedSubmitPreview?.submitToken
+      const submitOk = Boolean(payload.ok && (appCode === 0 || appCode === '0' || appCode == null))
       setHtml('dde-summary-box', `
-        <div><span class="dde-badge ${payload.ok ? 'success' : 'error'}">草稿提交${payload.ok ? '成功' : '失败'}</span></div>
-        <div class="dde-status-line">状态：${payload.status || '-'} ${escapeHtml(payload.statusText || payload.error || '')}</div>
+        <div><span class="dde-badge ${submitOk ? 'success' : 'error'}">草稿提交${submitOk ? '成功' : '失败'}</span></div>
+        <div class="dde-status-line">状态：${payload.status || '-'} ${escapeHtml(payload.statusText || payload.error || '')}${appCode != null ? `；code=${escapeHtml(String(appCode))}` : ''}</div>
         <div class="dde-status-line">返回：${escapeHtml(String(payload.responseBody || '').slice(0, 500))}</div>
+        ${submitOk && matchedSubmit ? '<div class="dde-status-line">页面将在 1.2 秒后自动刷新，以加载抖店最新规格/SKU 状态。</div>' : ''}
       `)
+      if (submitOk && matchedSubmit) {
+        window.setTimeout(() => {
+          location.reload()
+        }, 1200)
+      }
       return
     }
 
