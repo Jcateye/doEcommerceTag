@@ -3,7 +3,7 @@
   window.__DDE_HTTP_RECORDER_INSTALLED__ = true
   window.__DDE_HTTP_RECORDER_ENABLED__ = false
 
-  const MAX_TEXT_LENGTH = 120000
+  const MAX_TEXT_LENGTH = 1200000
 
   function now() {
     return new Date().toISOString()
@@ -52,17 +52,55 @@
     window.postMessage({ source: 'DDE_HTTP_RECORDER', payload }, '*')
   }
 
-  window.addEventListener('message', (event) => {
+  window.addEventListener('message', async (event) => {
     if (event.source !== window) return
     const data = event.data || {}
-    if (data.source !== 'DDE_HTTP_RECORDER_CONTROL') return
-    if (data.command === 'start') {
-      window.__DDE_HTTP_RECORDER_ENABLED__ = true
-      emit({ type: 'recorder-state', enabled: true, at: now() })
+    if (data.source === 'DDE_HTTP_RECORDER_CONTROL') {
+      if (data.command === 'start') {
+        window.__DDE_HTTP_RECORDER_ENABLED__ = true
+        emit({ type: 'recorder-state', enabled: true, at: now() })
+      }
+      if (data.command === 'stop') {
+        window.__DDE_HTTP_RECORDER_ENABLED__ = false
+        emit({ type: 'recorder-state', enabled: false, at: now() })
+      }
+      return
     }
-    if (data.command === 'stop') {
-      window.__DDE_HTTP_RECORDER_ENABLED__ = false
-      emit({ type: 'recorder-state', enabled: false, at: now() })
+
+    if (data.source === 'DDE_HTTP_SUBMITTER' && data.command === 'submitAddWithSchema') {
+      try {
+        const response = await fetch(data.url, {
+          method: 'POST',
+          credentials: 'include',
+          headers: {
+            'Accept': 'application/json, text/plain, */*',
+            'Content-Type': 'application/json;charset=utf-8',
+            'X-TT-From-Appid': 'ffa-goods',
+            'X-TT-From-End': 'PC',
+            'X-TT-From-Page': `${location.origin}${location.pathname}`,
+            'X-TT-From-Version': '1.0.1.3435',
+          },
+          body: JSON.stringify(data.body || {}),
+        })
+        const text = await response.text()
+        emit({
+          type: 'submit-result',
+          ok: response.ok,
+          status: response.status,
+          statusText: response.statusText,
+          responseBody: truncate(text),
+          submitToken: data.submitToken || '',
+          at: now(),
+        })
+      } catch (error) {
+        emit({
+          type: 'submit-result',
+          ok: false,
+          error: error.message,
+          submitToken: data.submitToken || '',
+          at: now(),
+        })
+      }
     }
   })
 
